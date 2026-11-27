@@ -8222,6 +8222,18 @@ func (recoveryMigrationFirstWriteWorkspaceKeySource) ByVersion(
 	return material, nil
 }
 
+func (source recoveryMigrationFirstWriteWorkspaceKeySource) ByVersionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	domain backupasset.KeyDomain,
+	version int,
+) (backupasset.DomainKeyMaterial, error) {
+	if tx == nil {
+		return backupasset.DomainKeyMaterial{}, errors.New("missing worker transaction")
+	}
+	return source.ByVersion(ctx, domain, version)
+}
+
 func (fixture migrationFixture) test069WorkerFirstWrite(t *testing.T) {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")

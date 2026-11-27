@@ -32,10 +32,11 @@ type recoveryFirstWritePreparer interface {
 }
 
 type recoveryOverwriteHistoricalKeySourceForTest struct {
-	material       backupasset.DomainKeyMaterial
-	activeCalls    int
-	byVersionCalls []int
-	lastVersionKey []byte
+	material         backupasset.DomainKeyMaterial
+	activeCalls      int
+	byVersionCalls   []int
+	byVersionTxCalls int
+	lastVersionKey   []byte
 }
 
 func (source *recoveryOverwriteHistoricalKeySourceForTest) Active(
@@ -67,6 +68,19 @@ func (source *recoveryOverwriteHistoricalKeySourceForTest) ByVersion(
 	material := cloneDomainKeyMaterial(source.material)
 	source.lastVersionKey = material.Key
 	return material, nil
+}
+
+func (source *recoveryOverwriteHistoricalKeySourceForTest) ByVersionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	domain backupasset.KeyDomain,
+	version int,
+) (backupasset.DomainKeyMaterial, error) {
+	if tx == nil {
+		return backupasset.DomainKeyMaterial{}, errors.New("missing worker transaction")
+	}
+	source.byVersionTxCalls++
+	return source.ByVersion(ctx, domain, version)
 }
 
 func TestRecoveryDeleteAuthorizationHandoffRequiresLivePendingClaimButAcceptsConsumedProof(t *testing.T) {
@@ -327,9 +341,9 @@ func TestRecoveryOverwriteArtifactBindingUsesHistoricalCleanupKey(t *testing.T) 
 		if err != nil {
 			t.Fatalf("issue locked overwrite permit: %v", err)
 		}
-		if keys.activeCalls != 1 || !reflect.DeepEqual(keys.byVersionCalls, []int{item.TargetLocatorKeyVersion}) {
-			t.Fatalf("overwrite cleanup-key calls active/by-version=%d/%v, want 1/%v",
-				keys.activeCalls, keys.byVersionCalls, []int{item.TargetLocatorKeyVersion})
+		if keys.activeCalls != 1 || keys.byVersionTxCalls != 1 || !reflect.DeepEqual(keys.byVersionCalls, []int{item.TargetLocatorKeyVersion}) {
+			t.Fatalf("overwrite cleanup-key calls active/by-version/tx=%d/%v/%d, want 1/%v/1",
+				keys.activeCalls, keys.byVersionCalls, keys.byVersionTxCalls, []int{item.TargetLocatorKeyVersion})
 		}
 		if len(keys.lastVersionKey) != sha256.Size ||
 			!bytes.Equal(keys.lastVersionKey, make([]byte, sha256.Size)) {
@@ -433,8 +447,8 @@ func TestRecoveryOrdinaryDeletePermitLockedIssuance(t *testing.T) {
 			permit.permit.ExpectedTargetRevision != handoff.job.TargetChainRevision ||
 			permit.proof.artifacts.keyVersion != handoff.item.TargetLocatorKeyVersion ||
 			!permit.proof.artifacts.valid() ||
-			len(keys.byVersionCalls) != 1 || keys.byVersionCalls[0] != handoff.item.TargetLocatorKeyVersion {
-			t.Fatalf("ordinary delete permit proof=%+v permit=%+v key versions=%v", permit.proof, permit.permit, keys.byVersionCalls)
+			len(keys.byVersionCalls) != 1 || keys.byVersionCalls[0] != handoff.item.TargetLocatorKeyVersion || keys.byVersionTxCalls != 1 {
+			t.Fatalf("ordinary delete permit proof=%+v permit=%+v key versions=%v tx calls=%d", permit.proof, permit.permit, keys.byVersionCalls, keys.byVersionTxCalls)
 		}
 		if _, err := permit.authorityAt(fixture.execution.serviceFixture.now, TargetDeleteRequest{Object: handoff.object}); err != nil {
 			t.Fatalf("issued ordinary delete permit authority=%v", err)
@@ -1921,9 +1935,14 @@ func testRecoveryAdoptionRejectsDurableDriftBetweenBoundaries(t *testing.T) {
 		t.Fatalf("take over interrupted recovery job: found=%t err=%v", found, err)
 	}
 	target := coordinator.target.(*recoveryRestartTargetFake)
-	material, err := coordinator.workspaceKeys.ByVersion(
-		context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion,
-	)
+	var material backupasset.DomainKeyMaterial
+	err = fixture.db.Transaction(func(tx *gorm.DB) error {
+		var keyErr error
+		material, keyErr = coordinator.workspaceKeys.ByVersionTx(
+			context.Background(), tx, backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion,
+		)
+		return keyErr
+	})
 	if err != nil {
 		t.Fatalf("load workspace marker key: %v", err)
 	}
@@ -1999,6 +2018,18 @@ func (recoveryWorkerWorkspaceKeySource) ByVersion(
 		return backupasset.DomainKeyMaterial{}, backupasset.ErrKeyUnavailable
 	}
 	return material, nil
+}
+
+func (source recoveryWorkerWorkspaceKeySource) ByVersionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	domain backupasset.KeyDomain,
+	version int,
+) (backupasset.DomainKeyMaterial, error) {
+	if tx == nil {
+		return backupasset.DomainKeyMaterial{}, errors.New("missing worker transaction")
+	}
+	return source.ByVersion(ctx, domain, version)
 }
 
 func TestWorkerClaimBindsQueuedJobToOneCurrentOwner(t *testing.T) {
@@ -6712,6 +6743,16 @@ func (spy *recoveryCleanupKeyAccessSpy) Active(
 
 func (spy *recoveryCleanupKeyAccessSpy) ByVersion(
 	context.Context,
+	backupasset.KeyDomain,
+	int,
+) (backupasset.DomainKeyMaterial, error) {
+	spy.calls++
+	return backupasset.DomainKeyMaterial{}, backupasset.ErrKeyUnavailable
+}
+
+func (spy *recoveryCleanupKeyAccessSpy) ByVersionTx(
+	context.Context,
+	*gorm.DB,
 	backupasset.KeyDomain,
 	int,
 ) (backupasset.DomainKeyMaterial, error) {

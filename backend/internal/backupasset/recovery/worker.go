@@ -98,13 +98,18 @@ type RecoveryWorkspaceKeySource interface {
 	ByVersion(context.Context, backupasset.KeyDomain, int) (backupasset.DomainKeyMaterial, error)
 }
 
+type recoveryWorkerKeySource interface {
+	Active(context.Context, backupasset.KeyDomain) (backupasset.DomainKeyMaterial, error)
+	ByVersionTx(context.Context, *gorm.DB, backupasset.KeyDomain, int) (backupasset.DomainKeyMaterial, error)
+}
+
 type WorkerCoordinatorDependencies struct {
 	DB              *gorm.DB
 	Metrics         Metrics
 	Audit           RecoveryAPIAuditWriter
 	SourceLeases    RecoverySourceLeaseCoordinator
 	LiveRevalidator RecoveryAuthorityRevalidator
-	WorkspaceKeys   RecoveryWorkspaceKeySource
+	WorkspaceKeys   recoveryWorkerKeySource
 	Target          TargetPort
 	SourceResolver  provider.RsyncRestoreSourceResolver
 	Now             func() time.Time
@@ -119,7 +124,7 @@ type WorkerCoordinator struct {
 	sourceValidator *SourceValidator
 	sourceLeases    RecoverySourceLeaseCoordinator
 	liveRevalidator RecoveryAuthorityRevalidator
-	workspaceKeys   RecoveryWorkspaceKeySource
+	workspaceKeys   recoveryWorkerKeySource
 	target          TargetPort
 	sourceResolver  provider.RsyncRestoreSourceResolver
 	now             func() time.Time
@@ -3050,7 +3055,7 @@ func (coordinator *WorkerCoordinator) loadInterruptedOperationHandoffTx(
 		item := items[index]
 		operationRow := operationRows[index]
 		locator, itemDigest, validateErr := coordinator.validateDurableRecoveryItem(
-			ctx, plan, job, item, operationRow, index, materials,
+			ctx, tx, plan, job, item, operationRow, index, materials,
 		)
 		if validateErr != nil {
 			return interruptedOperationHandoff{}, validateErr
@@ -3431,6 +3436,7 @@ func loadFreshIsolatedCheckpointOperationsTx(
 
 func (coordinator *WorkerCoordinator) validateDurableRecoveryItem(
 	ctx context.Context,
+	tx *gorm.DB,
 	plan model.BackupAssetRecoveryPlan,
 	job model.BackupAssetRecoveryJob,
 	item model.BackupAssetRecoveryJobItem,
@@ -3470,8 +3476,8 @@ func (coordinator *WorkerCoordinator) validateDurableRecoveryItem(
 	}
 	material, found := materials[item.TargetLocatorKeyVersion]
 	if !found {
-		material, err = coordinator.workspaceKeys.ByVersion(
-			ctx, backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion,
+		material, err = coordinator.workspaceKeys.ByVersionTx(
+			ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion,
 		)
 		if err != nil || !validTargetLocatorKey(material, item.TargetLocatorKeyVersion) {
 			return "", "", ErrRecoveryWorkerFenceLost
@@ -5224,8 +5230,8 @@ func (coordinator *WorkerCoordinator) currentFirstWritePermitPathTx(
 		if selectedItemID == "" {
 			return "", ErrRecoveryWorkerFenceLost
 		}
-		markerKey, err := coordinator.workspaceKeys.ByVersion(
-			ctx, backupasset.KeyDomainRecoveryCleanupOwnership, markerKeyVersion,
+		markerKey, err := coordinator.workspaceKeys.ByVersionTx(
+			ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership, markerKeyVersion,
 		)
 		if err != nil || !validTargetLocatorKey(markerKey, markerKeyVersion) {
 			return "", ErrRecoveryWorkerFenceLost

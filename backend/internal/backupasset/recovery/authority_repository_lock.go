@@ -3,12 +3,10 @@ package recovery
 import (
 	"context"
 	"errors"
-	"fmt"
 
-	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/internal/authoritylock"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 var errRecoveryAuthorityRepositoryLock = errors.New("recovery authority repository lock unavailable")
@@ -42,29 +40,15 @@ func lockRecoveryAuthorityRepositoryTx(ctx context.Context, tx *gorm.DB, reposit
 	if tx.Error != nil {
 		return tx.Error
 	}
-	switch tx.Name() {
-	case "postgres":
-		key := "xirang:recovery-authority-repository:v1:" + repositoryID
-		// GORM's SQL trace may interpolate bound parameters into logs.
-		err := tx.Session(&gorm.Session{Logger: logger.Discard}).WithContext(ctx).
-			Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", key).Error
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if errors.Is(err, context.Canceled) {
-			return context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return context.DeadlineExceeded
-		}
-		if err != nil {
-			return &recoveryAuthorityRepositoryLockError{cause: err}
-		}
-		return nil
-	case "sqlite":
-		// Production SQLite transactions begin IMMEDIATE and serialize writers.
-		return nil
-	default:
-		return fmt.Errorf("%w: unsupported database for recovery authority repository lock", backupasset.ErrInvalidState)
+	err := authoritylock.LockRepository(ctx, tx, repositoryID)
+	if err == nil || tx.Name() != "postgres" || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
+	// The shared lock sanitizes its public message; retain the underlying
+	// database diagnostic for recovery's existing retry classification.
+	cause := errors.Unwrap(err)
+	if cause == nil {
+		cause = err
+	}
+	return &recoveryAuthorityRepositoryLockError{cause: cause}
 }

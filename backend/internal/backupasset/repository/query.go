@@ -1918,7 +1918,7 @@ func (service *Service) beginManagedRsyncPointReadWithAdmission(
 	if backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointCommitted {
 		return nil, capabilityError(backupasset.CapabilityPointNotCommitted, "")
 	}
-	request, access, err := service.managedRsyncCommittedPointReadRequest(ctx, service.db, runtime, point)
+	request, access, err := service.managedRsyncCommittedPointReadRequest(ctx, nil, runtime, point)
 	if err != nil {
 		return nil, err
 	}
@@ -1955,9 +1955,13 @@ func mapManagedRsyncCommittedPointReadOpenError(ctx context.Context, err error) 
 	return capabilityError(backupasset.CapabilityMutableSourceChanged, "")
 }
 
-func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Context, db *gorm.DB, runtime managedRsyncPublicationRuntime, point model.RecoveryPoint) (provider.RsyncCommittedPointReadRequest, provider.AccessBinding, error) {
-	if db == nil {
+func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Context, tx *gorm.DB, runtime managedRsyncPublicationRuntime, point model.RecoveryPoint) (provider.RsyncCommittedPointReadRequest, provider.AccessBinding, error) {
+	if service == nil || (tx == nil && service.db == nil) {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync database unavailable", backupasset.ErrInvalidState)
+	}
+	db := tx
+	if db == nil {
+		db = service.db
 	}
 	if point.RepositoryID != runtime.repository.ID || point.ID == "" || backupasset.ValidateOpaqueID(point.ID) != nil ||
 		point.ProducingTaskID == nil || *point.ProducingTaskID != runtime.task.ID || point.ProducingTaskRunID == nil ||
@@ -2004,14 +2008,14 @@ func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Contex
 		!lineage.PointDeadlineAt.Equal(attempt.PointDeadlineAt.UTC()) || runtime.binding.validateForAttempt(attempt) != nil {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point locator changed", backupasset.ErrConflict)
 	}
-	markerKey, err := service.rsyncCommittedPointMarkerKey(ctx, runtime.repository.ID)
+	markerKey, err := service.rsyncCommittedPointMarkerKey(ctx, tx, runtime.repository.ID)
 	if err != nil {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
 	}
 	if point.SourceFingerprint != managedRsyncSourceFingerprint(markerKey, runtime.binding, point.ID) {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point source changed", backupasset.ErrConflict)
 	}
-	limits, err := service.managedRsyncManifestLimits()
+	limits, err := service.managedRsyncManifestLimits(ctx, tx)
 	if err != nil {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
 	}
@@ -2042,22 +2046,35 @@ func rsyncPersistedTimePrecision(db *gorm.DB) time.Duration {
 	return 0
 }
 
-func (service *Service) rsyncCommittedPointMarkerKey(ctx context.Context, repositoryID string) ([]byte, error) {
+func (service *Service) rsyncCommittedPointMarkerKey(ctx context.Context, tx *gorm.DB, repositoryID string) ([]byte, error) {
 	if service == nil || service.keyring == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
 		return nil, fmt.Errorf("%w: managed Rsync point marker key is unavailable", backupasset.ErrInvalidState)
 	}
-	material, err := service.keyring.Active(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	var material backupasset.DomainKeyMaterial
+	var err error
+	if tx != nil {
+		material, err = service.keyring.ReadActiveTx(ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	} else {
+		material, err = service.keyring.Active(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load managed Rsync point marker key: %w", err)
 	}
+	defer clear(material.Key)
 	return rsyncOwnershipDigest(material.Key, "xirang.rsync.tree.marker-key.v1", repositoryID), nil
 }
 
-func (service *Service) managedRsyncManifestLimits() (provider.ManifestLimits, error) {
+func (service *Service) managedRsyncManifestLimits(ctx context.Context, tx *gorm.DB) (provider.ManifestLimits, error) {
 	if service == nil || service.foundation == nil {
 		return provider.ManifestLimits{}, fmt.Errorf("%w: managed Rsync manifest limits are unavailable", backupasset.ErrInvalidState)
 	}
-	config, err := service.foundation.PublicationConfig()
+	var config backupasset.PublicationConfig
+	var err error
+	if tx != nil {
+		config, err = service.foundation.PublicationConfigTx(ctx, tx)
+	} else {
+		config, err = service.foundation.PublicationConfig()
+	}
 	if err != nil {
 		return provider.ManifestLimits{}, err
 	}

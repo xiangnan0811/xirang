@@ -75,6 +75,8 @@ committed 本地 strict tree 的范围读取具有真实非零 offset 支持；�
 
 准备回退停止准入并排空，恢复保存的 legacy locator 后仍暂停，保留所有已提交点与保护记录；受管历史不能因此重新获得 mutable fallback。配对 `000064` 的 history、versioned link、active lease 阻止 used-down。
 
+在 PostgreSQL 上，受管 Rsync 的发布预约和回退准备在取得任务、链接或仓库行锁前，先取得受控恢复使用的同一来源仓库事务锁。回退准备在排空准入后读取当前活动链接的身份，取得仓库锁后重验请求中的任务版本及同一活动链接；链接变化时拒绝本次准备。发布预约重验锁内的任务、运行、链接和绑定，沿用原发布期限。失败或取消回滚当前事务。SQLite 沿用现有写事务串行化。
+
 ## Rclone 版本化与加密
 
 - legacy 默认 `legacy_mutable`。Portable `versioned_prefix` 为独立 namespace，每次运行规范化清单并最后写 commit marker；弱/无哈希须逐字节核对源与目标，超过字节/时限失败关闭。
@@ -206,7 +208,7 @@ rollback capability 独立于临时 publication state 和 expiry 投影，GET �
 
 `RecoveryEligibilityAuthority.ObserveRecoveryAuthority` 与 `RecoveryAuthorityRevalidator.RevalidateRecoveryAuthorityTx` 分别拥有有界外部观察和 caller 事务内的耐久事实重验。流程为短事务 capture → 事务外 SSH/SFTP/Repository pinned-tree/Processing artifact 观察 → 短锁定事务 revalidation。外部 I/O 不得放 DB 事务内。
 
-Repository 独立解析、捕获与重验 Rsync 恢复源时，每一阶段在 PostgreSQL 同一个只读可重复读快照中检查该阶段的持久来源行。读取可与发布和保留事务的行锁并行，外部观察前后仍分别从新快照重验绑定与来源证据。密钥和设置沿用各自的读取服务。调用方在签发或执行恢复动作的事务内重验来源时，仍持有原有的行锁。
+Repository 独立解析、捕获与重验 Rsync 恢复源时，每一阶段在 PostgreSQL 同一个只读可重复读快照中检查该阶段的持久来源行。读取可与发布和保留事务的行锁并行，外部观察前后仍分别从新快照重验绑定与来源证据。来源标记密钥和发布设置通过该阶段的数据库连接读取。调用方在签发或执行恢复动作的事务内重验来源时，仍持有原有的行锁，并复用当前事务连接读取所需密钥和发布设置。
 
 外部观察完成后，重验事务先锁恢复计划并核对绑定摘要和转换版本，再锁目标和源权威。预检持久化也先锁计划，因此同一计划的观察收尾和预检提交可以安全等待彼此完成。
 

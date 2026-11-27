@@ -2204,6 +2204,16 @@
           ]
         },
         {
+          "name": "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres",
+          "required_paths": [
+            "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres",
+            "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres/success",
+            "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres/revision_drift",
+            "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres/active_link_replacement",
+            "TestPrepareRsyncVersioningRollbackAuthorityLockPostgres/cancellation"
+          ]
+        },
+        {
           "name": "TestPublicationLeaseDeadlinePrecisionPostgres",
           "required_paths": [
             "TestPublicationLeaseDeadlinePrecisionPostgres",
@@ -2234,9 +2244,25 @@
           ]
         },
         {
+          "name": "TestRecoveryRsyncAuthorityPostgresUsesCallerConnection",
+          "required_paths": [
+            "TestRecoveryRsyncAuthorityPostgresUsesCallerConnection"
+          ]
+        },
+        {
           "name": "TestRecoveryRsyncSourceAuthorityPostgresCallerTransactionExcludesWriter",
           "required_paths": [
             "TestRecoveryRsyncSourceAuthorityPostgresCallerTransactionExcludesWriter"
+          ]
+        },
+        {
+          "name": "TestRsyncPublicationReservationAuthorityLockPostgres",
+          "required_paths": [
+            "TestRsyncPublicationReservationAuthorityLockPostgres",
+            "TestRsyncPublicationReservationAuthorityLockPostgres/reservation_after_release",
+            "TestRsyncPublicationReservationAuthorityLockPostgres/cancellation",
+            "TestRsyncPublicationReservationAuthorityLockPostgres/live_link_drift",
+            "TestRsyncPublicationReservationAuthorityLockPostgres/deadline_expired_while_waiting"
           ]
         },
         {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/internal/authoritylock"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
@@ -508,6 +509,42 @@ func blockedRsyncVersioningSummary(capabilityRevision uint64) backupasset.RsyncV
 
 func (service *Service) prepareRsyncVersioningRollbackAfterDrain(ctx context.Context, request backupasset.RsyncVersioningRollbackPreparationRequest) error {
 	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var linkHint struct {
+			ID           *string
+			RepositoryID *string
+		}
+		if tx.Name() == "postgres" {
+			// The projection contains no encrypted fields and takes no row locks.
+			// Starting from the active Task preserves its not-found result even
+			// when it has no active link.
+			result := tx.Table("tasks").Select("task_repository_links.id, task_repository_links.repository_id").
+				Joins("LEFT JOIN task_repository_links ON task_repository_links.task_id = tasks.id AND task_repository_links.unlinked_at IS NULL").
+				Where("tasks.id = ? AND tasks.archived_at IS NULL", request.TaskID).Limit(1).Scan(&linkHint)
+			if result.Error != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if errors.Is(result.Error, context.Canceled) {
+					return context.Canceled
+				}
+				if errors.Is(result.Error, context.DeadlineExceeded) {
+					return context.DeadlineExceeded
+				}
+				return capabilityError(backupasset.CapabilityProviderUnavailable, "")
+			}
+			if result.RowsAffected == 0 {
+				return fmt.Errorf("%w: Rsync versioning Task", backupasset.ErrNotFound)
+			}
+			if linkHint.ID == nil || linkHint.RepositoryID == nil || backupasset.ValidateOpaqueID(*linkHint.RepositoryID) != nil {
+				return fmt.Errorf("%w: Rsync versioning rollback link is unavailable", backupasset.ErrConflict)
+			}
+			if err := authoritylock.LockRepository(ctx, tx, *linkHint.RepositoryID); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+				return capabilityError(backupasset.CapabilityProviderUnavailable, "")
+			}
+		}
 		var taskEntity model.Task
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND archived_at IS NULL", request.TaskID).First(&taskEntity).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -523,8 +560,18 @@ func (service *Service) prepareRsyncVersioningRollbackAfterDrain(ctx context.Con
 			return fmt.Errorf("%w: Rsync versioning rollback Task revision changed", backupasset.ErrConflict)
 		}
 		var link model.TaskRepositoryLink
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
+		linkQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID)
+		if tx.Name() == "postgres" {
+			linkQuery = linkQuery.Where("id = ? AND repository_id = ?", *linkHint.ID, *linkHint.RepositoryID)
+		}
+		if err := linkQuery.First(&link).Error; err != nil {
+			if tx.Name() == "postgres" && errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("%w: Rsync versioning rollback link changed", backupasset.ErrConflict)
+			}
 			return fmt.Errorf("lock Rsync versioning rollback link: %w", err)
+		}
+		if tx.Name() == "postgres" && (link.ID != *linkHint.ID || link.RepositoryID != *linkHint.RepositoryID) {
+			return fmt.Errorf("%w: Rsync versioning rollback link changed", backupasset.ErrConflict)
 		}
 		if link.TaskID == nil || *link.TaskID != taskEntity.ID || strings.TrimSpace(link.EncryptedLegacyLocator) == "" {
 			return fmt.Errorf("%w: Rsync versioning rollback legacy locator is unavailable", backupasset.ErrConflict)

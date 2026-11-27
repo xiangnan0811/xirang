@@ -1726,8 +1726,8 @@ func (coordinator *WorkerCoordinator) ordinaryDeletePermit(
 			return ErrRecoveryWorkerFenceLost
 		}
 
-		material, err := coordinator.workspaceKeys.ByVersion(
-			ctx, backupasset.KeyDomainRecoveryCleanupOwnership, fence.item.TargetLocatorKeyVersion,
+		material, err := coordinator.workspaceKeys.ByVersionTx(
+			ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership, fence.item.TargetLocatorKeyVersion,
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
