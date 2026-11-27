@@ -7165,7 +7165,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回单个节点的详细信息",
+                "description": "返回节点详情，当前配置仍匹配最近生效探测时附带 probe_token。",
                 "produces": [
                     "application/json"
                 ],
@@ -8033,7 +8033,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间",
+                "description": "测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。",
                 "produces": [
                     "application/json"
                 ],
@@ -8079,7 +8079,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "重新读取节点当前主机密钥（不发送任何凭据），仅当其 SHA256 指纹与提交值一致且 known_hosts 中没有冲突记录时写入 known_hosts。仅管理员可用。",
+                "description": "重新读取节点当前主机密钥（不发送任何凭据），仅当 SHA256 指纹一致且 known_hosts 无冲突记录时写入。可提供 probe_token，结果过时返回 409 node_probe_stale。仅管理员可用。",
                 "consumes": [
                     "application/json"
                 ],
@@ -21620,6 +21620,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "fingerprint_sha256": {
+                    "type": "string"
+                },
+                "probe_token": {
                     "type": "string"
                 }
             }

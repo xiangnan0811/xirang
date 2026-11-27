@@ -6,7 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ThemeProvider } from "@/context/theme-context";
-import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
+import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
 
@@ -14,6 +14,7 @@ const EMERGENCY_PROOF = "fresh-manual-proof";
 
 const {
   toastSuccessMock,
+  toastInfoMock,
   toastErrorMock,
   runNodeDoctorMock,
   trustNodeHostKeyMock,
@@ -36,6 +37,7 @@ const {
   return {
     toastSuccessMock: vi.fn(),
     toastErrorMock: vi.fn(),
+    toastInfoMock: vi.fn(),
     runNodeDoctorMock: vi.fn(),
     trustNodeHostKeyMock: vi.fn(),
     authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
@@ -50,6 +52,7 @@ const {
 });
 
 const HOST_KEY_FINGERPRINT = "SHA256:hostKeyProbeFingerprintForNodesPage";
+const PROBE_TOKEN = "d".repeat(64);
 
 function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
   return {
@@ -60,6 +63,7 @@ function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
       algorithm: "ssh-ed25519",
       fingerprintSha256: HOST_KEY_FINGERPRINT,
     },
+    probeToken: PROBE_TOKEN,
   };
 }
 
@@ -193,6 +197,7 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,
+    info: toastInfoMock,
   },
 }));
 
@@ -414,6 +419,7 @@ describe("NodesPage", () => {
     setSearchParamsMock.mockReset();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
+    toastInfoMock.mockReset();
     runNodeDoctorMock.mockReset();
     trustNodeHostKeyMock.mockReset();
     getTasksMock.mockReset();
@@ -659,11 +665,86 @@ describe("NodesPage", () => {
     await user.click(await screen.findByRole("button", { name: "信任并重试" }));
 
     await waitFor(() => {
-      expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT);
+      expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT, PROBE_TOKEN);
       expect(testNodeConnection).toHaveBeenCalledTimes(2);
     });
     expect(toastSuccessMock).toHaveBeenCalledWith("已信任该主机指纹，正在重新测试连接。");
     expect(toastSuccessMock).toHaveBeenCalledWith("node-prod-1：连接成功");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("服务器不再接受的测试结果只给出重测提示，不打开指纹确认", async () => {
+    const user = userEvent.setup();
+    createContext({
+      testNodeConnection: vi.fn().mockResolvedValue({ ok: false, message: "已有更新的连接测试", stale: "retest" }),
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+
+    await waitFor(() => {
+      expect(toastInfoMock).toHaveBeenCalledWith("node-prod-1：该结果已被更新的配置或测试取代，请重新测试连接确认。");
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("被更新测试、节点变更或身份切换取代的结果保持静默", async () => {
+    const user = userEvent.setup();
+    const testNodeConnection = vi.fn().mockResolvedValue({ ok: false, message: "", stale: "superseded" });
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toastInfoMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("信任时测试结果已过期则关闭确认、不重测也不再次信任", async () => {
+    const user = userEvent.setup();
+    trustNodeHostKeyMock.mockRejectedValue(new ApiError(409, "连接测试结果已过期", {
+      code: 409,
+      message: "连接测试结果已过期",
+      data: { error_code: "node_probe_stale" },
+    }));
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+
+    await waitFor(() => {
+      expect(toastInfoMock).toHaveBeenCalledWith("node-prod-1：节点或其最近一次连接测试已变化，未信任该指纹。请重新测试连接后再确认。");
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1);
+    expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT, PROBE_TOKEN);
+    expect(testNodeConnection).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -739,6 +820,58 @@ describe("NodesPage", () => {
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("无法连接节点读取主机密钥");
     expect(screen.getByRole("dialog")).toHaveTextContent("node-prod-1");
+  });
+
+  it("身份往返后旧信任请求结束不会释放新弹窗的待确认状态", async () => {
+    const user = userEvent.setup();
+    const staleTrust = createDeferred<unknown>();
+    const currentTrust = createDeferred<unknown>();
+    trustNodeHostKeyMock
+      .mockReturnValueOnce(staleTrust.promise)
+      .mockReturnValueOnce(currentTrust.promise);
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    createContext({ testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1));
+
+    // A → B → A: each sign-in starts a new session; the first trust request is still in flight.
+    bumpAuthSessionGeneration();
+    rerenderAuth(view, { role: "admin", token: "token-b" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    bumpAuthSessionGeneration();
+    rerenderAuth(view, { role: "admin", token: "test-token" });
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      staleTrust.reject(new Error("旧会话的信任请求失败"));
+    });
+
+    // The new dialog's pending trust survives the old request: still busy, no stray error, not closable.
+    const trustButton = screen.getByRole("button", { name: "信任并重试" });
+    expect(trustButton).toHaveAttribute("aria-busy", "true");
+    expect(trustButton).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toHaveTextContent(HOST_KEY_FINGERPRINT);
+
+    await act(async () => {
+      currentTrust.resolve({
+        alreadyTrusted: false,
+        algorithm: "ssh-ed25519",
+        fingerprintSha256: HOST_KEY_FINGERPRINT,
+      });
+    });
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledTimes(3));
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).toHaveBeenCalledWith("已信任该主机指纹，正在重新测试连接。");
+    expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(2);
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("非管理员看到指纹但没有信任按钮", async () => {

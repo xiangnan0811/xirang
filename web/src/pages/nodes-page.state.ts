@@ -26,6 +26,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, TaskRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { isNodeProbeStaleError } from "@/lib/api/nodes-api";
 import { getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -42,6 +43,8 @@ type HostKeyIssueState = {
   nodeName: string;
   code: NodeHostKeyIssueCode;
   hostKey: NodeHostKeyInfo;
+  /** Identity of the test that reported this host key; trust is bound to it when present. */
+  probeToken?: string;
 };
 
 function policyEmergencyTaskIds(tasks: readonly TaskRecord[], nodeId: number): number[] {
@@ -144,6 +147,8 @@ export function useNodesPageState() {
   const [fileBrowserTab, setFileBrowserTab] = useState<"files" | "docker">("files");
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
+  // The latest test start owns the spinner, so an older completion cannot clear a newer test's state.
+  const testOperationRef = useRef(0);
   const [doctorNode, setDoctorNode] = useState<NodeRecord | null>(null);
   const [doctorResult, setDoctorResult] = useState<NodeDoctorResult | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
@@ -157,6 +162,9 @@ export function useNodesPageState() {
   // Node whose trust request currently owns the host key dialog; a ref so async
   // probe completions observe it without stale closures.
   const hostKeyTrustOwnerRef = useRef<number | null>(null);
+  // Identity of the trust request that owns the pending state. An identity change retires it, so a
+  // request from an earlier session cannot release a newer dialog's pending trust (A→B→A).
+  const hostKeyTrustOperationRef = useRef(0);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [batchCmdOpen, setBatchCmdOpen] = useState(false);
@@ -207,6 +215,7 @@ export function useNodesPageState() {
     authEpochRef.current += 1;
     mountedRef.current = true;
     hostKeyTrustOwnerRef.current = null;
+    hostKeyTrustOperationRef.current += 1;
     return () => {
       authEpochRef.current += 1;
       mountedRef.current = false;
@@ -366,12 +375,43 @@ export function useNodesPageState() {
     setEditorOpen(true);
   };
 
+  // A host key issue describes one test of one node configuration; a newer test or a mutation of
+  // that node retires it, unless a trust request currently owns the dialog.
+  const retireHostKeyIssue = (nodeIds: readonly number[]) => {
+    const trustOwner = hostKeyTrustOwnerRef.current;
+    setHostKeyIssue((current) => (
+      current && nodeIds.includes(current.nodeId) && trustOwner !== current.nodeId ? null : current
+    ));
+  };
+
+  const startNodeTest = (nodeId: number) => {
+    retireHostKeyIssue([nodeId]);
+    testOperationRef.current += 1;
+    setTestingNodeId(nodeId);
+    return testOperationRef.current;
+  };
+
+  const finishNodeTest = (operation: number) => {
+    if (testOperationRef.current === operation) {
+      setTestingNodeId(null);
+    }
+  };
+
   const presentProbeResult = (
     nodeId: number,
     nodeName: string,
     result: NodeConnectionProbeOutcome,
     prefixName: boolean,
   ) => {
+    // A superseded result belongs to a newer test, mutation or identity: stay silent. A result the
+    // server no longer accepts gets retest guidance and never reaches the host key dialog.
+    if (result.stale) {
+      if (result.stale === "retest") {
+        retireHostKeyIssue([nodeId]);
+        toast.info(t("nodes.connectionTestStale", { name: nodeName }));
+      }
+      return;
+    }
     const message = prefixName ? `${nodeName}：${result.message}` : result.message;
     if (!result.ok && result.errorCode && result.hostKey) {
       // While a trust request owns the dialog, a concurrent probe for another
@@ -386,6 +426,7 @@ export function useNodesPageState() {
         nodeName,
         code: result.errorCode,
         hostKey: result.hostKey,
+        ...(result.probeToken ? { probeToken: result.probeToken } : {}),
       });
       setHostKeyError(null);
       return;
@@ -447,7 +488,7 @@ export function useNodesPageState() {
       return;
     }
 
-    setTestingNodeId(savedNodeId);
+    const testOperation = startNodeTest(savedNodeId);
     void testNodeConnection(savedNodeId).then((result) => {
       if (saveStillCurrent()) {
         presentProbeResult(savedNodeId, input.name, result, false);
@@ -458,7 +499,7 @@ export function useNodesPageState() {
       }
     }).finally(() => {
       if (saveStillCurrent()) {
-        setTestingNodeId((current) => current === savedNodeId ? null : current);
+        finishNodeTest(testOperation);
       }
     });
   };
@@ -587,6 +628,7 @@ export function useNodesPageState() {
       if (!deleteStillCurrent()) {
         return;
       }
+      retireHostKeyIssue([node.id]);
       setSelectedNodeIds((prev) => prev.filter((id) => id !== node.id));
       toast.success(t("nodes.nodeDeleted", { name: node.name }));
     } catch (error) {
@@ -644,6 +686,7 @@ export function useNodesPageState() {
       if (!bulkStillCurrent()) {
         return;
       }
+      retireHostKeyIssue(ids);
       setSelectedNodeIds([]);
       if (result.notFoundIds.length > 0) {
         toast.success(
@@ -666,27 +709,22 @@ export function useNodesPageState() {
     }
     const authEpoch = authEpochRef.current;
     const sessionGeneration = getAuthSessionGeneration();
+    const testStillCurrent = () => authEpochRef.current === authEpoch
+      && getAuthSessionGeneration() === sessionGeneration
+      && (roleRef.current === "admin" || roleRef.current === "operator");
+    const testOperation = startNodeTest(node.id);
     try {
-      setTestingNodeId(node.id);
       const result = await testNodeConnection(node.id);
-      if (
-        authEpochRef.current !== authEpoch
-        || getAuthSessionGeneration() !== sessionGeneration
-        || (roleRef.current !== "admin" && roleRef.current !== "operator")
-      ) {
+      if (!testStillCurrent()) {
         return;
       }
-      setTestingNodeId(null);
+      finishNodeTest(testOperation);
       presentProbeResult(node.id, node.name, result, true);
     } catch (error) {
-      if (
-        authEpochRef.current !== authEpoch
-        || getAuthSessionGeneration() !== sessionGeneration
-        || (roleRef.current !== "admin" && roleRef.current !== "operator")
-      ) {
+      if (!testStillCurrent()) {
         return;
       }
-      setTestingNodeId(null);
+      finishNodeTest(testOperation);
       toast.error(getErrorMessage(error));
     }
   };
@@ -703,8 +741,13 @@ export function useNodesPageState() {
       setHostKeyError(t("console.notLoggedIn"));
       return;
     }
+    // Synchronous duplicate guard: the button's disabled state lags a render behind.
+    if (hostKeyTrustOwnerRef.current !== null) {
+      return;
+    }
     const sessionGeneration = getAuthSessionGeneration();
     const authEpoch = authEpochRef.current;
+    const trustOperation = ++hostKeyTrustOperationRef.current;
     hostKeyTrustOwnerRef.current = issue.nodeId;
     setHostKeyTrusting(true);
     setHostKeyError(null);
@@ -712,32 +755,40 @@ export function useNodesPageState() {
       && getAuthSessionGeneration() === sessionGeneration
       && authEpochRef.current === authEpoch
       && roleRef.current === "admin";
-    try {
-      await apiClient.trustNodeHostKey(token, issue.nodeId, issue.hostKey.fingerprintSha256);
-    } catch (error) {
+    // Only the request that still owns the pending state may release it.
+    const releaseTrust = () => {
+      if (hostKeyTrustOperationRef.current !== trustOperation) {
+        return false;
+      }
       hostKeyTrustOwnerRef.current = null;
       if (mountedRef.current) {
         setHostKeyTrusting(false);
       }
-      if (!trustStillCurrent()) {
+      return true;
+    };
+    try {
+      await apiClient.trustNodeHostKey(token, issue.nodeId, issue.hostKey.fingerprintSha256, issue.probeToken);
+    } catch (error) {
+      if (!releaseTrust() || !trustStillCurrent()) {
+        return;
+      }
+      if (isNodeProbeStaleError(error)) {
+        // The reviewed test no longer describes the node; nothing was trusted.
+        setHostKeyIssue(null);
+        setHostKeyError(null);
+        toast.info(t("nodes.hostKeyTrustStale", { name: issue.nodeName }));
         return;
       }
       setHostKeyError(getErrorMessage(error));
       return;
     }
-    if (!trustStillCurrent()) {
-      hostKeyTrustOwnerRef.current = null;
-      if (mountedRef.current) {
-        setHostKeyTrusting(false);
-      }
+    if (!releaseTrust() || !trustStillCurrent()) {
       return;
     }
     toast.success(t("nodes.hostKeyTrusted"));
     setHostKeyIssue(null);
-    hostKeyTrustOwnerRef.current = null;
-    setHostKeyTrusting(false);
     const retestNodeId = issue.nodeId;
-    setTestingNodeId(retestNodeId);
+    const testOperation = startNodeTest(retestNodeId);
     try {
       const result = await testNodeConnection(retestNodeId);
       if (!trustStillCurrent()) {
@@ -752,7 +803,7 @@ export function useNodesPageState() {
       toast.error(`${issue.nodeName}：${getErrorMessage(error)}`);
     } finally {
       if (trustStillCurrent()) {
-        setTestingNodeId(null);
+        finishNodeTest(testOperation);
       }
     }
   };

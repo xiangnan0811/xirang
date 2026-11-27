@@ -334,6 +334,10 @@ func lockConfigImportCredentialInventory(tx *gorm.DB, data configImportData) (*c
 		if err := tx.Exec("UPDATE nodes SET id = id WHERE 1 = 0").Error; err != nil {
 			return nil, fmt.Errorf("保留导入节点写锁失败: %w", err)
 		}
+	} else if len(data.Nodes) > 0 && strings.EqualFold(tx.Name(), "postgres") {
+		if err := tx.Exec("LOCK TABLE nodes IN ROW EXCLUSIVE MODE").Error; err != nil {
+			return nil, fmt.Errorf("保留导入节点写锁失败: %w", err)
+		}
 	}
 	return loadConfigImportCredentialInventory(tx.Statement.Context, tx, data, true)
 }

@@ -38,6 +38,11 @@ type HostKeyTrustResult struct {
 // authentication, and appends it to known_hosts only if its SHA256 fingerprint
 // equals expectedFingerprint and the host has no conflicting entry.
 func TrustNewHostKey(ctx context.Context, address, expectedFingerprint string) (HostKeyTrustResult, error) {
+	return TrustNewHostKeyWithGuard(ctx, address, expectedFingerprint, nil)
+}
+
+// TrustNewHostKeyWithGuard validates caller state while the append is made.
+func TrustNewHostKeyWithGuard(ctx context.Context, address, expectedFingerprint string, guard KnownHostsWriteGuard) (HostKeyTrustResult, error) {
 	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return HostKeyTrustResult{}, err
@@ -65,8 +70,7 @@ func TrustNewHostKey(ctx context.Context, address, expectedFingerprint string) (
 	// known_hosts is re-read under the write lock after the probe, so a record
 	// added concurrently (another trust or auto-accept) is honored, never duplicated
 	// with a conflicting key.
-	alreadyTrusted, err := recordNewKnownHost(knownHostsPath, address, remote, key)
-	result.AlreadyTrusted = alreadyTrusted
+	result.AlreadyTrusted, err = recordNewKnownHostWithGuard(knownHostsPath, address, remote, key, guard)
 	return result, err
 }
 

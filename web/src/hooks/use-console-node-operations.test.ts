@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewNodeInput, NewSSHKeyInput, NodeRecord, SSHKeyRecord } from "@/types/domain";
-import { ApiError } from "@/lib/api/core";
+import type { NewNodeInput, NewSSHKeyInput, NodeConnectionProbeOutcome, NodeRecord, SSHKeyRecord } from "@/types/domain";
+import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import { useNodeOperations } from "./use-console-node-operations";
 import { toast } from "@/components/ui/toast-sonner";
 
@@ -14,6 +14,8 @@ const { apiClientMock } = vi.hoisted(() => ({
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
     deleteNodes: vi.fn(),
+    testNodeConnection: vi.fn(),
+    getNode: vi.fn(),
   },
 }));
 
@@ -116,6 +118,8 @@ function renderOperations() {
   const setSSHKeys = vi.fn();
   const setWarning = vi.fn();
   const markInventoryMutated = vi.fn();
+  const refreshNodes = vi.fn().mockResolvedValue(undefined);
+  const settledNodesListGeneration = vi.fn<() => number | null>(() => 1);
   const markTasksMutated = vi.fn();
   const handleWriteApiError = vi.fn((_: string, error: unknown) => {
     const message = error instanceof Error ? error.message : "failed";
@@ -134,6 +138,8 @@ function renderOperations() {
     setSSHKeys,
     setWarning,
     markInventoryMutated,
+    refreshNodes,
+    settledNodesListGeneration,
     markTasksMutated,
     ensureDemoWriteAllowed: vi.fn(),
     handleWriteApiError,
@@ -146,6 +152,8 @@ function renderOperations() {
     setSSHKeys,
     setWarning,
     markInventoryMutated,
+    refreshNodes,
+    settledNodesListGeneration,
     markTasksMutated,
     handleWriteApiError,
   };
@@ -950,5 +958,342 @@ describe("useNodeOperations delete lifetime", () => {
     expect(setWarning).toHaveBeenCalledWith("batch delete failed");
     expect(setNodes).not.toHaveBeenCalled();
     expect(markInventoryMutated).not.toHaveBeenCalled();
+  });
+});
+
+describe("useNodeOperations connection test reconciliation", () => {
+  const TOKEN_A = "a".repeat(64);
+  const TOKEN_B = "b".repeat(64);
+  const hostKey = { algorithm: "ssh-ed25519", fingerprintSha256: "SHA256:probe" };
+  const hostKeyResult = (probeToken?: string) => ({
+    ok: false,
+    message: "未知主机密钥被拒绝",
+    errorCode: "ssh_host_key_unknown" as const,
+    hostKey,
+    ...(probeToken ? { probeToken } : {}),
+  });
+  const superseded: NodeConnectionProbeOutcome = { ok: false, message: "", stale: "superseded" };
+
+  beforeEach(() => {
+    apiClientMock.testNodeConnection.mockReset();
+    apiClientMock.getNode.mockReset();
+    apiClientMock.updateNode.mockReset();
+    apiClientMock.deleteNode.mockReset();
+    apiClientMock.deleteNodes.mockReset();
+  });
+
+  it("returns a validated host key result with its token and publishes health only through the shared refresh", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.getNode.mockResolvedValue({ ...nodeRecord, probeToken: TOKEN_A });
+    const { result, setNodes, markInventoryMutated, refreshNodes } = renderOperations();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+
+    expect(outcome).toEqual(hostKeyResult(TOKEN_A));
+    expect(apiClientMock.getNode).toHaveBeenCalledWith("token-1", 9);
+    // The authoritative read follows the shared refresh, never the other way round.
+    expect(refreshNodes.mock.invocationCallOrder[0]).toBeLessThan(apiClientMock.getNode.mock.invocationCallOrder[0] ?? 0);
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+    expect(setNodes).not.toHaveBeenCalled();
+    expect(markInventoryMutated).not.toHaveBeenCalled();
+  });
+
+  it("reports a validated success and leaves the online health to the refreshed inventory", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue({ ok: true, message: "连接成功", latencyMs: 8, probeToken: TOKEN_A });
+    apiClientMock.getNode.mockResolvedValue({ ...nodeRecord, status: "online", probeToken: TOKEN_A });
+    const { result, setNodes, refreshNodes } = renderOperations();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+
+    expect(outcome).toEqual({ ok: true, message: "连接成功", probeToken: TOKEN_A });
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+    expect(setNodes).not.toHaveBeenCalled();
+  });
+
+  it("downgrades an applied result to a retest when the authoritative record carries another or no token", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.getNode
+      .mockResolvedValueOnce({ ...nodeRecord, probeToken: TOKEN_B })
+      .mockResolvedValueOnce({ ...nodeRecord })
+      .mockRejectedValueOnce(new Error("detail unavailable"));
+    const { result, refreshNodes, handleWriteApiError } = renderOperations();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let outcome: NodeConnectionProbeOutcome | undefined;
+      await act(async () => {
+        outcome = await result.current.testNodeConnection(9);
+      });
+      expect(outcome).toEqual({ ok: false, message: "未知主机密钥被拒绝", stale: "retest" });
+    }
+    expect(refreshNodes).toHaveBeenCalledTimes(3);
+    expect(handleWriteApiError).not.toHaveBeenCalled();
+  });
+
+  it("maps a server stale result to a retest without validation, host key or local health", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue({ ok: false, stale: true, message: "已有更新的连接测试" });
+    const { result, setNodes, refreshNodes } = renderOperations();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+
+    expect(outcome).toEqual({ ok: false, message: "已有更新的连接测试", stale: "retest" });
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+    expect(setNodes).not.toHaveBeenCalled();
+  });
+
+  it("keeps the legacy host key feedback for a server without tokens, still publishing through the refresh", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult());
+    const { result, setNodes, refreshNodes } = renderOperations();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+
+    expect(outcome).toEqual(hostKeyResult());
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+    expect(setNodes).not.toHaveBeenCalled();
+  });
+
+  it("silences a late result after the node was edited here", async () => {
+    const probe = createDeferred<unknown>();
+    apiClientMock.testNodeConnection.mockReturnValue(probe.promise);
+    apiClientMock.updateNode.mockResolvedValue({ node: { ...nodeRecord, host: "10.0.0.10" } });
+    const { result, setNodes, refreshNodes } = renderOperations();
+
+    let pending!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      pending = result.current.testNodeConnection(9);
+    });
+    await act(async () => {
+      await result.current.updateNode(9, { ...plainInput, host: "10.0.0.10" });
+    });
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      probe.resolve(hostKeyResult(TOKEN_A));
+      outcome = await pending;
+    });
+
+    expect(outcome).toEqual(superseded);
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).not.toHaveBeenCalled();
+    // Only the edit wrote the cache.
+    expect(setNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("silences a result whose validation read returns after the node was edited here", async () => {
+    const validation = createDeferred<NodeRecord>();
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.getNode.mockReturnValue(validation.promise);
+    apiClientMock.updateNode.mockResolvedValue({ node: nodeRecord });
+    const { result, refreshNodes } = renderOperations();
+
+    let pending!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      pending = result.current.testNodeConnection(9);
+    });
+    await vi.waitFor(() => expect(apiClientMock.getNode).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await result.current.updateNode(9, plainInput);
+    });
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      validation.resolve({ ...nodeRecord, probeToken: TOKEN_A });
+      outcome = await pending;
+    });
+
+    expect(outcome).toEqual(superseded);
+    // The shared refresh settled before the validation read started; only the read was overtaken.
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the authoritative read only after the shared refresh settles", async () => {
+    const refresh = createDeferred<void>();
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.getNode.mockResolvedValue({ ...nodeRecord, probeToken: TOKEN_A });
+    const { result, refreshNodes } = renderOperations();
+    refreshNodes.mockReturnValueOnce(refresh.promise);
+
+    let pending!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      pending = result.current.testNodeConnection(9);
+    });
+    await vi.waitFor(() => expect(refreshNodes).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      refresh.resolve();
+      outcome = await pending;
+    });
+
+    expect(apiClientMock.getNode).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual(hostKeyResult(TOKEN_A));
+  });
+
+  it("downgrades a matching token to a retest when a newer list is in flight or settled around the authoritative read", async () => {
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.getNode.mockResolvedValue({ ...nodeRecord, probeToken: TOKEN_A });
+    const { result, settledNodesListGeneration } = renderOperations();
+    const retest: NodeConnectionProbeOutcome = { ok: false, message: "未知主机密钥被拒绝", stale: "retest" };
+
+    // A list started after the probe's refresh settled and is still in flight: no detail read.
+    settledNodesListGeneration.mockReturnValueOnce(null);
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+    expect(outcome).toEqual(retest);
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+
+    // A newer list settled while the detail read was in flight: its matching token predates it.
+    settledNodesListGeneration.mockReturnValueOnce(1).mockReturnValueOnce(2);
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+    expect(outcome).toEqual(retest);
+    expect(apiClientMock.getNode).toHaveBeenCalledTimes(1);
+  });
+
+  it("silences a result whose shared refresh settles after the node was edited here, without a validation read", async () => {
+    const refresh = createDeferred<void>();
+    apiClientMock.testNodeConnection.mockResolvedValue(hostKeyResult(TOKEN_A));
+    apiClientMock.updateNode.mockResolvedValue({ node: nodeRecord });
+    const { result, refreshNodes } = renderOperations();
+    refreshNodes.mockReturnValueOnce(refresh.promise);
+
+    let pending!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      pending = result.current.testNodeConnection(9);
+    });
+    await vi.waitFor(() => expect(refreshNodes).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await result.current.updateNode(9, plainInput);
+    });
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      refresh.resolve();
+      outcome = await pending;
+    });
+
+    expect(outcome).toEqual(superseded);
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+  });
+
+  it("silences late results after single or batch deletion and never resurrects the node", async () => {
+    const single = createDeferred<unknown>();
+    const batch = createDeferred<unknown>();
+    apiClientMock.testNodeConnection
+      .mockReturnValueOnce(single.promise)
+      .mockReturnValueOnce(batch.promise);
+    apiClientMock.deleteNode.mockResolvedValue(undefined);
+    apiClientMock.deleteNodes.mockResolvedValue({ deleted: 1, notFoundIds: [] });
+    const { result, setNodes, refreshNodes } = renderOperations();
+
+    let first!: Promise<NodeConnectionProbeOutcome>;
+    let second!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      first = result.current.testNodeConnection(9);
+      second = result.current.testNodeConnection(10);
+    });
+    await act(async () => {
+      await result.current.deleteNode(9);
+      await result.current.deleteNodes([10]);
+    });
+    const outcomes: NodeConnectionProbeOutcome[] = [];
+    await act(async () => {
+      single.resolve({ ok: true, message: "连接成功", probeToken: TOKEN_A });
+      batch.resolve({ ok: true, message: "连接成功", probeToken: TOKEN_B });
+      outcomes.push(await first, await second);
+    });
+
+    expect(outcomes).toEqual([superseded, superseded]);
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).not.toHaveBeenCalled();
+    // Only the two deletions wrote the cache.
+    expect(setNodes).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets only the latest test of a node publish when completions arrive in reverse order", async () => {
+    const older = createDeferred<unknown>();
+    apiClientMock.testNodeConnection
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(hostKeyResult(TOKEN_B));
+    apiClientMock.getNode.mockResolvedValue({ ...nodeRecord, probeToken: TOKEN_B });
+    const { result, refreshNodes } = renderOperations();
+
+    let olderOutcome!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      olderOutcome = result.current.testNodeConnection(9);
+    });
+    let newer: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      newer = await result.current.testNodeConnection(9);
+    });
+    let late: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      older.resolve(hostKeyResult(TOKEN_A));
+      late = await olderOutcome;
+    });
+
+    expect(newer).toEqual(hostKeyResult(TOKEN_B));
+    expect(late).toEqual(superseded);
+    expect(apiClientMock.getNode).toHaveBeenCalledTimes(1);
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("silences a result or failure that returns under another auth session", async () => {
+    const resolved = createDeferred<unknown>();
+    const rejected = createDeferred<unknown>();
+    apiClientMock.testNodeConnection
+      .mockReturnValueOnce(resolved.promise)
+      .mockReturnValueOnce(rejected.promise);
+    const { result, refreshNodes, handleWriteApiError, setWarning } = renderOperations();
+
+    let first!: Promise<NodeConnectionProbeOutcome>;
+    let second!: Promise<NodeConnectionProbeOutcome>;
+    act(() => {
+      first = result.current.testNodeConnection(9);
+      second = result.current.testNodeConnection(10);
+    });
+    // Logging out and back in, even with the same token, starts a new session generation.
+    bumpAuthSessionGeneration();
+    const outcomes: NodeConnectionProbeOutcome[] = [];
+    await act(async () => {
+      resolved.resolve(hostKeyResult(TOKEN_A));
+      rejected.reject(new ApiError(500, "probe failed"));
+      outcomes.push(await first, await second);
+    });
+
+    expect(outcomes).toEqual([superseded, superseded]);
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).not.toHaveBeenCalled();
+    expect(handleWriteApiError).not.toHaveBeenCalled();
+    expect(setWarning).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure that still owns the node through the shared write error", async () => {
+    apiClientMock.testNodeConnection.mockRejectedValue(new Error("probe failed"));
+    const { result, handleWriteApiError, refreshNodes } = renderOperations();
+
+    await expect(act(async () => {
+      await result.current.testNodeConnection(9);
+    })).rejects.toThrow("probe failed");
+
+    expect(handleWriteApiError).toHaveBeenCalledTimes(1);
+    expect(refreshNodes).not.toHaveBeenCalled();
   });
 });

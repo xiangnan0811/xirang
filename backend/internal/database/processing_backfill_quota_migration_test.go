@@ -40,7 +40,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 			t.Fatal(err)
 		}
 		assertMigrationVersion(t, m, 99)
-		if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, f.engine, 99); err != nil {
 			t.Fatal(err)
 		}
 		var provider, fingerprint, state string
@@ -73,7 +73,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 		if err := RunMigrations(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationVersion(t, m, 99)
+		assertMigrationVersion(t, m, 100)
 	})
 	t.Run("UnusedDownAndReupgrade", func(t *testing.T) {
 		m, db := f.openAt(t, 98)
@@ -89,7 +89,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 			t.Fatal(err)
 		}
 		assertMigrationVersion(t, m, 99)
-		if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, f.engine, 99); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -153,7 +153,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 				statement = postgres
 			}
 			f.mustExec(t, db, statement)
-			if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); !errors.Is(err, ErrMigrationSchemaDrift) {
+			if err := validateMinimumRecoverySchema(db, f.engine, 99); !errors.Is(err, ErrMigrationSchemaDrift) {
 				t.Fatalf("expected schema drift, got %v", err)
 			}
 			assertMigrationVersion(t, m, 99)

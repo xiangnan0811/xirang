@@ -510,6 +510,11 @@ func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB
 	if err := tx.WithContext(ctx).Table(snapshot.table).Where(snapshot.where, snapshot.args...).Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	if snapshot.table == "nodes" || snapshot.table == "ssh_keys" {
+		for _, row := range rows {
+			delete(row, "probe_generation")
+		}
+	}
 	return rows, nil
 }
 

@@ -44,6 +44,7 @@ type Node struct {
 	MaintenanceEnd     *time.Time `json:"maintenance_end,omitempty"`
 	ExpiryDate         *time.Time `gorm:"" json:"expiry_date,omitempty"`
 	Archived           bool       `gorm:"not null;default:false" json:"archived"`
+	ProbeGeneration    string     `gorm:"->" json:"-"`
 	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`

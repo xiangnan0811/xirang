@@ -1,5 +1,5 @@
 import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
-import { parseNumericId, request, formatTime } from "./core";
+import { ApiError, parseNumericId, request, formatTime } from "./core";
 import { finiteNumber } from "./number-utils";
 
 type NodeResponse = {
@@ -22,6 +22,8 @@ type NodeResponse = {
   archived?: boolean;
   backup_dir?: string;
   use_sudo?: boolean;
+  /** Opaque identity of the latest applied connection test; omitted unless it still matches the node's current identity. */
+  probe_token?: string | null;
 };
 
 type NodeBatchDeleteResponse = {
@@ -32,9 +34,13 @@ type NodeBatchDeleteResponse = {
 type TestNodeResponse = {
   ok: boolean;
   message: string;
+  /** Present when the server no longer accepts this test as the node's latest; carries no health or host key. */
+  stale?: boolean;
   latency_ms?: number;
   /** Immediate timestamp of this manual test. Not a periodic probe. */
   probe_at?: string;
+  /** Opaque identity of this applied test. Legacy servers omit it. */
+  probe_token?: string;
   error_code?: string;
   host_key?: {
     algorithm?: string;
@@ -69,9 +75,13 @@ export type NodeUpdateResult = {
 export type NodeConnectionTestResult = {
   ok: boolean;
   message: string;
+  /** The server superseded this test; no other field describes the node. */
+  stale?: true;
   latencyMs?: number;
   /** Display time of this manual test, when the server returned one. */
   testedAt?: string;
+  /** Opaque identity of this applied test, when the server returned one. */
+  probeToken?: string;
   errorCode?: NodeHostKeyIssueCode;
   hostKey?: NodeHostKeyInfo;
 };
@@ -112,6 +122,7 @@ function mapNodeStatus(raw?: string): NodeStatus {
 }
 
 function mapNode(row: NodeResponse): NodeRecord {
+  const probeToken = typeof row.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : undefined;
   return {
     id: row.id,
     name: row.name,
@@ -135,6 +146,7 @@ function mapNode(row: NodeResponse): NodeRecord {
     archived: row.archived ?? false,
     backupDir: row.backup_dir || '',
     useSudo: row.use_sudo ?? false,
+    ...(probeToken ? { probeToken } : {}),
   };
 }
 
@@ -167,6 +179,19 @@ function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
 }
 
 export const __test__ = { mapNodeDoctorResult, mapNode };
+
+/** Trust was refused because the node changed or a newer connection test applied after the reviewed one. */
+export function isNodeProbeStaleError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || (error.status !== 409 && error.httpStatus !== 409)) {
+    return false;
+  }
+  const detail = error.detail;
+  if (!detail || typeof detail !== "object" || !("data" in detail)) {
+    return false;
+  }
+  const data = detail.data;
+  return Boolean(data && typeof data === "object" && "error_code" in data && data.error_code === "node_probe_stale");
+}
 
 function isHostKeyIssueCode(value: unknown): value is NodeHostKeyIssueCode {
   return value === "ssh_host_key_unknown" || value === "ssh_host_key_mismatch";
@@ -293,20 +318,31 @@ export function createNodesApi() {
         method: "POST",
         token
       });
+      if (row?.stale === true) {
+        return { ok: false, stale: true, message: String(row.message ?? "") };
+      }
       const testedAt = typeof row?.probe_at === "string" ? formatTime(row.probe_at) : "";
+      const probeToken = typeof row?.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : "";
       return {
         ok: Boolean(row?.ok),
         message: String(row?.message ?? ""),
         latencyMs: row?.latency_ms,
         ...(testedAt && testedAt !== "-" ? { testedAt } : {}),
+        ...(probeToken ? { probeToken } : {}),
         ...mapHostKeyIssue(row),
       };
     },
 
+    /**
+     * `probeToken` binds the trust to the reviewed test result; the server refuses it with
+     * `node_probe_stale` when that result no longer describes the node. Without it the
+     * server only compares the fresh fingerprint (legacy contract).
+     */
     async trustNodeHostKey(
       token: string,
       nodeId: number,
       fingerprintSha256: string,
+      probeToken?: string,
     ): Promise<{ alreadyTrusted: boolean; algorithm: string; fingerprintSha256: string }> {
       const row = await request<{
         already_trusted?: boolean;
@@ -315,7 +351,9 @@ export function createNodesApi() {
       }>(`/nodes/${nodeId}/trust-host-key`, {
         method: "POST",
         token,
-        body: { fingerprint_sha256: fingerprintSha256 },
+        body: probeToken
+          ? { fingerprint_sha256: fingerprintSha256, probe_token: probeToken }
+          : { fingerprint_sha256: fingerprintSha256 },
       });
       return {
         alreadyTrusted: Boolean(row?.already_trusted),

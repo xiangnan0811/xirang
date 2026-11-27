@@ -63,9 +63,20 @@ func (r *NodeRepository) Create(ctx context.Context, node *model.Node) error {
 	return apperr.WrapDBError(r.db.WithContext(ctx).Create(node).Error)
 }
 
-// Update saves changes to an existing node.
-func (r *NodeRepository) Update(ctx context.Context, node *model.Node) error {
-	return apperr.WrapDBError(r.db.WithContext(ctx).Save(node).Error)
+// Update writes configuration fields without overwriting probe or backup results.
+func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateStatus bool) error {
+	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BasePath", "BackupDir", "UseSudo", "MaintenanceStart", "MaintenanceEnd", "ExpiryDate", "Archived", "EscalationPolicyID", "UpdatedAt"}
+	if updateStatus {
+		fields = append(fields, "Status")
+	}
+	result := r.db.WithContext(ctx).Model(node).Select(fields).Updates(node)
+	if result.Error != nil {
+		return apperr.WrapDBError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return apperr.WrapDBError(gorm.ErrRecordNotFound)
+	}
+	return nil
 }
 
 // Delete removes a node by its primary key.

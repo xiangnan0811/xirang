@@ -142,6 +142,7 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 	}
 
 	oldBackupDir := node.BackupDir
+	updateStatus := input.Status != ""
 
 	// Merge defaults from existing node for unspecified fields
 	if input.Port == 0 {
@@ -212,7 +213,7 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 
 	applyOptionalFields(node, input)
 
-	if err := s.repo.Update(ctx, node); err != nil {
+	if err := s.repo.Update(ctx, node, updateStatus); err != nil {
 		err = apperr.WrapDBError(err)
 		return nil, "", err
 	}

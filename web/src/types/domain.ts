@@ -205,6 +205,12 @@ export interface NodeRecord {
   archived?: boolean;
   backupDir?: string;
   useSudo?: boolean;
+  /**
+   * Opaque identity of the latest applied connection test, present only while that result still
+   * matches the node's current configuration and credential. Only the node detail read carries it;
+   * list reads never do.
+   */
+  probeToken?: string;
 }
 
 export type NodeDoctorCheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -230,11 +236,22 @@ export interface NodeHostKeyInfo {
   fingerprintSha256: string;
 }
 
+/**
+ * Why a connection test result no longer describes its node:
+ * - `superseded`: a newer local test, a node mutation or an identity change owns the node; show nothing.
+ * - `retest`: the server no longer accepts this result as current; offer a retest and never trust its host key.
+ */
+export type NodeConnectionProbeStale = "superseded" | "retest";
+
 export interface NodeConnectionProbeOutcome {
   ok: boolean;
   message: string;
+  /** Set when the result is stale; a stale outcome carries no host key or probe token. */
+  stale?: NodeConnectionProbeStale;
   errorCode?: NodeHostKeyIssueCode;
   hostKey?: NodeHostKeyInfo;
+  /** Opaque identity of the applied result; host key trust sends it back. Legacy servers omit it. */
+  probeToken?: string;
 }
 
 export type RestoreDrillStatus = "pending" | "running" | "success" | "failed" | "skipped" | "canceled";

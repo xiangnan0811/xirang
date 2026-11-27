@@ -418,6 +418,7 @@ const en = {
     authKey: "Key",
     authPassword: "Password",
     connectionTestFailed: "Connection test failed",
+    connectionTestStale: "{{name}}: This result was superseded by a newer configuration or test. Test the connection again to confirm.",
     totalNodes: "Total Nodes",
     totalNodesDesc: "All managed hosts",
     onlineNodes: "Last test passed",
@@ -638,6 +639,7 @@ const en = {
     hostKeyContactAdmin: "Ask an administrator to verify and trust this fingerprint.",
     hostKeyMismatchWarning: "The host key does not match the known_hosts record. The server may have been reinstalled, or this may be a man-in-the-middle attack. Verify it manually, then have an administrator update known_hosts.",
     hostKeyTrusted: "Host fingerprint trusted. Retrying the connection.",
+    hostKeyTrustStale: "{{name}}: The node or its latest connection test changed, so this fingerprint was not trusted. Test the connection again before confirming.",
   },
 
   // ── node editor dialog ──

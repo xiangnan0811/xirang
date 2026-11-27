@@ -346,6 +346,10 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		initialVersion, initialDirty, err := driver.Version()
+		if err != nil || initialDirty {
+			t.Fatalf("initial metadata=%d/%t err=%v", initialVersion, initialDirty, err)
+		}
 		reached, release := make(chan int, 1), make(chan struct{})
 		const callback = "test:quota-admission-before-interest"
 		if err := f.db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
@@ -413,8 +417,8 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 		}
 		var version int
 		var dirty bool
-		if err := db.QueryRowContext(ctx, "SELECT version, dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 99 || dirty {
-			t.Fatalf("metadata=%d/%t err=%v", version, dirty, err)
+		if err := db.QueryRowContext(ctx, "SELECT version, dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != initialVersion || dirty {
+			t.Fatalf("metadata=%d/%t want=%d/false err=%v", version, dirty, initialVersion, err)
 		}
 		quotaLedger(t, f, 1, 32)
 		var jobs, interests int64
@@ -436,6 +440,10 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 		driver, err := pgxmigrate.WithInstance(db, &pgxmigrate.Config{})
 		if err != nil {
 			t.Fatal(err)
+		}
+		initialVersion, initialDirty, err := driver.Version()
+		if err != nil || initialDirty {
+			t.Fatalf("initial metadata=%d/%t err=%v", initialVersion, initialDirty, err)
 		}
 		conn, err := db.Conn(ctx)
 		if err != nil {
@@ -508,7 +516,7 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 			t.Fatalf("downgrade left jobs=%d interests=%d err=%v", jobs, interests, err)
 		}
 		quotaLedger(t, f, 0, 0)
-		if err := driver.SetVersion(99, false); err != nil {
+		if err := driver.SetVersion(initialVersion, false); err != nil {
 			t.Fatalf("restore disposable metadata: %v", err)
 		}
 	})

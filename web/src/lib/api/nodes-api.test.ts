@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test__, createNodesApi } from "./nodes-api";
+import { ApiError } from "./core";
+import { __test__, createNodesApi, isNodeProbeStaleError } from "./nodes-api";
+
+const PROBE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 function createMockResponse(status = 200, body = "") {
   return {
     status,
     ok: status >= 200 && status < 300,
+    // Error responses read Retry-After, so the fixture needs a header lookup like a real Response.
+    headers: { get: vi.fn().mockReturnValue(null) },
     text: vi.fn().mockResolvedValue(body),
   } as unknown as Response;
 }
@@ -412,5 +417,78 @@ describe("nodes api", () => {
       openAlerts: 0,
       runningTasks: 0,
     });
+  });
+
+  it("maps an opaque probe_token on node reads and omits a null or empty one", () => {
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: PROBE_TOKEN }).probeToken).toBe(PROBE_TOKEN);
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: null })).not.toHaveProperty("probeToken");
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: "" })).not.toHaveProperty("probeToken");
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h" })).not.toHaveProperty("probeToken");
+  });
+
+  it("maps an applied test's probe_token and reduces a stale result to its message", async () => {
+    const envelope = (data: Record<string, unknown>) => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data }));
+    fetchMock
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "未知主机密钥被拒绝",
+        probe_at: "2026-09-01T00:00:00Z",
+        probe_token: PROBE_TOKEN,
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        stale: true,
+        message: "已有更新的连接测试",
+        probe_at: "2026-09-01T00:00:00Z",
+        probe_token: PROBE_TOKEN,
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+      }));
+
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toMatchObject({
+      ok: false,
+      probeToken: PROBE_TOKEN,
+      errorCode: "ssh_host_key_unknown",
+      hostKey: { fingerprintSha256: "SHA256:abc" },
+    });
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toEqual({
+      ok: false,
+      stale: true,
+      message: "已有更新的连接测试",
+    });
+  });
+
+  it("trustNodeHostKey binds the trust to the reviewed probe token when one is known", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: { already_trusted: false, algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+    })));
+
+    await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ fingerprint_sha256: "SHA256:abc", probe_token: PROBE_TOKEN });
+  });
+
+  it("recognizes only the node_probe_stale conflict as a stale trust", async () => {
+    const conflict = (errorCode: string) => createMockResponse(409, JSON.stringify({
+      code: 409,
+      message: "conflict",
+      data: { error_code: errorCode },
+    }));
+    fetchMock
+      .mockResolvedValueOnce(conflict("node_probe_stale"))
+      .mockResolvedValueOnce(conflict("ssh_host_key_changed"));
+
+    const stale = await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN).catch((error: unknown) => error);
+    const changed = await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN).catch((error: unknown) => error);
+
+    expect(stale).toBeInstanceOf(ApiError);
+    expect(isNodeProbeStaleError(stale)).toBe(true);
+    expect(isNodeProbeStaleError(changed)).toBe(false);
+    expect(isNodeProbeStaleError(new Error("node_probe_stale"))).toBe(false);
   });
 });

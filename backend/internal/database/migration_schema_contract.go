@@ -931,6 +931,11 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 	if err := validateProcessingBackfillQuotaSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
+	if version >= 100 {
+		if err := validateNodeProbeGenerationSchema(db, dbType); err != nil {
+			return migrationSchemaDriftError(version, err.Error())
+		}
+	}
 
 	return nil
 }

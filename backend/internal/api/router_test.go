@@ -20,6 +20,8 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset/content"
+	"xirang/backend/internal/config"
+	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -1311,12 +1313,16 @@ func TestNodeTrustHostKeyRouteRequiresAdmin(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", filepath.Join(t.TempDir(), "known_hosts"))
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := database.Open(config.Config{DBType: "sqlite", SQLitePath: filepath.Join(t.TempDir(), "node-trust.sqlite")})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Alert{}, &model.AuditLog{}, &model.CredentialAuditEvent{}, &model.TokenRevocation{}); err != nil {
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+	if err := database.RunMigrations(db, "sqlite"); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 

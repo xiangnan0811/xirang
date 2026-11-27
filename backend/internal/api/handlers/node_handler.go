@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -9,11 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
-	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
@@ -111,7 +110,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 
 // Get godoc
 // @Summary      获取节点详情
-// @Description  返回单个节点的详细信息
+// @Description  返回节点详情，当前配置仍匹配最近生效探测时附带 probe_token。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -125,12 +124,19 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
+	node, token, err := readNodeWithProbeToken(c.Request.Context(), h.db, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-	respondOK(c, node.Sanitized())
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondOK(c, struct {
+		model.Node
+		ProbeToken string `json:"probe_token,omitempty"`
+	}{node.Sanitized(), token})
 }
 
 // Create godoc
@@ -379,7 +385,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 
 // TestConnection godoc
 // @Summary      测试节点 SSH 连接
-// @Description  测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间
+// @Description  测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -393,189 +399,120 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	if !ok {
 		return
 	}
-
-	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
+	ctx := c.Request.Context()
+	snap, err := admitNodeProbe(ctx, h.db, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-	nodeLog := logger.Module("api").With().Uint("node_id", node.ID).Logger()
-
-	authMethods, _, credential, err := sshutil.BuildSSHAuthWithKeyForPurpose(node, h.db, sshutil.PurposeNodeTest)
 	if err != nil {
-		testedAt := time.Now()
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
+		if ctx.Err() == nil {
+			respondInternalError(c, err)
 		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeBlocked,
-			ErrorMessage:     err.Error(),
-			Metadata: map[string]any{
-				"stage": "auth_build",
-			},
-		})
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
 		return
 	}
-
-	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		testedAt := time.Now()
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
-		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeFailure,
-			ErrorMessage:     err.Error(),
-			Metadata: map[string]any{
-				"stage": "host_key",
-			},
-		})
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
-		return
-	}
-
+	node := snap.node
+	credential := snap.credential
+	stage := "auth_build"
+	outcome := credentialaudit.OutcomeBlocked
+	probeErr := snap.authErr
 	start := time.Now()
-	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User:              node.Username,
-		Auth:              authMethods,
-		HostKeyCallback:   hostKeyCallback,
-		HostKeyAlgorithms: sshutil.HostKeyAlgorithmsForAddress(address),
-		Timeout:           5 * time.Second,
-	})
-	testedAt := time.Now()
-	if err != nil {
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
-		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		var hostKeyErr *sshutil.HostKeyError
-		isHostKeyErr := errors.As(err, &hostKeyErr)
-		metadata := map[string]any{
-			"stage":      "dial",
-			"latency_ms": int(time.Since(start).Milliseconds()),
-		}
-		if isHostKeyErr {
-			metadata["host_key_issue"] = string(hostKeyErr.Kind)
-		}
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeFailure,
-			ErrorMessage:     err.Error(),
-			Metadata:         metadata,
+	latency := 0
+	if probeErr == nil {
+		dialCtx, cancelDial := context.WithTimeout(ctx, 5*time.Second)
+		stage = "host_key"
+		outcome = credentialaudit.OutcomeFailure
+		callback, callbackErr := sshutil.ResolveSSHHostKeyCallbackWithGuard(func(prepare, write func() error) error {
+			return guardNodeProbe(dialCtx, h.db, snap, false, prepare, write)
 		})
-		if isHostKeyErr {
-			errorCode := "ssh_host_key_unknown"
-			if hostKeyErr.Kind == sshutil.HostKeyMismatch {
-				errorCode = "ssh_host_key_mismatch"
+		probeErr = callbackErr
+		if probeErr == nil {
+			stage = "dial"
+			address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
+			client, dialErr := sshutil.DialSSH(dialCtx, address, node.Username, snap.auth, callback)
+			probeErr = dialErr
+			if client != nil {
+				_ = client.Close()
 			}
-			respondOK(c, gin.H{
-				"ok":         false,
-				"message":    hostKeyErr.Error(),
-				"error_code": errorCode,
-				"host_key": gin.H{
-					"algorithm":          hostKeyErr.Algorithm(),
-					"fingerprint_sha256": hostKeyErr.Fingerprint(),
-				},
-			})
-			return
+			if probeErr == nil {
+				latency = int(time.Since(start).Milliseconds())
+				if latency <= 0 {
+					latency = 1
+				}
+			}
 		}
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
+		cancelDial()
+	}
+	if ctx.Err() != nil {
 		return
 	}
-	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	latency := int(time.Since(start).Milliseconds())
-	if latency <= 0 {
-		latency = 1
+	if errors.Is(probeErr, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
 	}
-
-	node.Status = "online"
-	node.ConnectionLatency = latency
-	node.LastSeenAt = &testedAt
-	if err := h.db.Save(&node).Error; err != nil {
+	testedAt := time.Now().UTC()
+	status := "offline"
+	if probeErr == nil {
+		status = "online"
+		outcome = credentialaudit.OutcomeSuccess
+		stage = "success"
+	}
+	lastUsed, err := applyNodeProbe(ctx, h.db, snap, status, latency, testedAt)
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
+	}
+	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
-
-	lastUsedUpdated := false
-	if node.SSHKeyID != nil {
-		now := time.Now()
-		if err := h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error; err != nil {
-			nodeLog.Warn().Uint("ssh_key_id", *node.SSHKeyID).Err(err).Msg("更新 SSH Key 最近使用时间失败")
-		} else {
-			lastUsedUpdated = true
-		}
+	metadata := map[string]any{"stage": stage}
+	if stage == "dial" || stage == "success" {
+		metadata["latency_ms"] = int(time.Since(start).Milliseconds())
 	}
-
-	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-		Action:           "node.credential.test_connection",
-		Purpose:          sshutil.PurposeNodeTest,
-		CredentialKind:   credential.Kind,
-		CredentialSource: credential.Source,
-		SSHKeyID:         credential.KeyID,
-		NodeID:           credentialaudit.PtrUint(node.ID),
-		Outcome:          credentialaudit.OutcomeSuccess,
-		Metadata: map[string]any{
-			"stage":                "success",
-			"latency_ms":           latency,
-			"last_used_at_updated": lastUsedUpdated,
-		},
-	})
-
-	respondOK(c, gin.H{
-		"ok":         true,
-		"message":    "SSH 连通性检测成功",
-		"latency_ms": latency,
-		"probe_at":   testedAt,
-	})
+	if stage == "success" {
+		metadata["last_used_at_updated"] = lastUsed
+	}
+	var hostKeyErr *sshutil.HostKeyError
+	if errors.As(probeErr, &hostKeyErr) {
+		metadata["host_key_issue"] = string(hostKeyErr.Kind)
+	}
+	event := credentialaudit.Event{Action: "node.credential.test_connection", Purpose: sshutil.PurposeNodeTest, CredentialKind: credential.Kind, CredentialSource: credential.Source, SSHKeyID: credential.KeyID, NodeID: credentialaudit.PtrUint(node.ID), Outcome: outcome, Metadata: metadata}
+	if probeErr != nil {
+		event.ErrorMessage = probeErr.Error()
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	writeCredentialAuditFromGin(c, h.db.WithContext(ctx), event)
+	payload := gin.H{"ok": probeErr == nil, "probe_at": testedAt, "probe_token": snap.token}
+	if probeErr == nil {
+		payload["message"] = "SSH 连通性检测成功"
+		payload["latency_ms"] = latency
+	} else if hostKeyErr != nil {
+		payload["message"] = hostKeyErr.Error()
+		payload["error_code"] = "ssh_host_key_unknown"
+		if hostKeyErr.Kind == sshutil.HostKeyMismatch {
+			payload["error_code"] = "ssh_host_key_mismatch"
+		}
+		payload["host_key"] = gin.H{"algorithm": hostKeyErr.Algorithm(), "fingerprint_sha256": hostKeyErr.Fingerprint()}
+	} else {
+		payload["message"] = "SSH 连接失败，请检查主机地址、端口、认证配置"
+	}
+	respondOK(c, payload)
 }
 
 type trustHostKeyRequest struct {
 	FingerprintSHA256 string `json:"fingerprint_sha256"`
+	ProbeToken        string `json:"probe_token"`
 }
 
 // TrustHostKey godoc
 // @Summary      信任节点 SSH 主机指纹
-// @Description  重新读取节点当前主机密钥（不发送任何凭据），仅当其 SHA256 指纹与提交值一致且 known_hosts 中没有冲突记录时写入 known_hosts。仅管理员可用。
+// @Description  重新读取节点当前主机密钥（不发送任何凭据），仅当 SHA256 指纹一致且 known_hosts 无冲突记录时写入。可提供 probe_token，结果过时返回 409 node_probe_stale。仅管理员可用。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -606,14 +543,37 @@ func (h *NodeHandler) TrustHostKey(c *gin.Context) {
 		return
 	}
 
-	var node model.Node
-	if err := h.db.First(&node, id).Error; err != nil {
+	ctx := c.Request.Context()
+	snap, err := trustProbeSnapshot(ctx, h.db, id, req.ProbeToken)
+	if errors.Is(err, errNodeProbeStale) {
+		respondConflictData(c, staleNodeProbeMessage, gin.H{"error_code": "node_probe_stale"})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-
+	if err != nil {
+		if ctx.Err() == nil {
+			respondInternalError(c, err)
+		}
+		return
+	}
+	node := snap.node
 	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
-	result, err := sshutil.TrustNewHostKey(c.Request.Context(), address, fingerprint)
+	result, err := sshutil.TrustNewHostKeyWithGuard(ctx, address, fingerprint, func(prepare, write func() error) error {
+		if req.ProbeToken != "" {
+			return guardNodeProbe(ctx, h.db, snap, true, prepare, write)
+		}
+		return guardLegacyTrust(ctx, h.db, snap, prepare, write)
+	})
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, errNodeProbeStale) {
+		respondConflictData(c, staleNodeProbeMessage, gin.H{"error_code": "node_probe_stale"})
+		return
+	}
 
 	metadata := map[string]any{"stage": "host_key_trust"}
 	if result.Algorithm != "" {

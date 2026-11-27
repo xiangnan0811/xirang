@@ -418,6 +418,7 @@ const zh = {
     authKey: "密钥",
     authPassword: "密码",
     connectionTestFailed: "连接测试失败",
+    connectionTestStale: "{{name}}：该结果已被更新的配置或测试取代，请重新测试连接确认。",
     totalNodes: "节点总数",
     totalNodesDesc: "覆盖全部资产主机",
     onlineNodes: "最近测试通过",
@@ -638,6 +639,7 @@ const zh = {
     hostKeyContactAdmin: "请联系管理员核对并信任该指纹。",
     hostKeyMismatchWarning: "主机密钥与 known_hosts 记录不一致。服务器可能已重装，也可能存在中间人攻击。请先人工核实，确认可信后再由管理员更新 known_hosts。",
     hostKeyTrusted: "已信任该主机指纹，正在重新测试连接。",
+    hostKeyTrustStale: "{{name}}：节点或其最近一次连接测试已变化，未信任该指纹。请重新测试连接后再确认。",
   },
 
   // ── node editor dialog ──

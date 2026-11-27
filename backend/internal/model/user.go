@@ -94,6 +94,7 @@ type SSHKey struct {
 	AllowedPurposes string     `gorm:"type:text;not null;default:''" json:"allowed_purposes"`
 	AllowedNodeIDs  string     `gorm:"type:text;not null;default:''" json:"allowed_node_ids"`
 	AllowedNodeTags string     `gorm:"type:text;not null;default:''" json:"allowed_node_tags"`
+	ProbeGeneration string     `gorm:"->" json:"-"`
 	LastUsedAt      *time.Time `json:"last_used_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`

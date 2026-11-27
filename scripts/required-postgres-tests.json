@@ -1029,6 +1029,50 @@
           ]
         },
         {
+          "name": "TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres",
+          "required_paths": ["TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeGuardSerializesCredentialChangeSQLitePostgres",
+          "required_paths": ["TestNodeProbeGuardSerializesCredentialChangeSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeSharedKeyConcurrentOutcomesSQLitePostgres",
+          "required_paths": ["TestNodeProbeSharedKeyConcurrentOutcomesSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeHandlersReverseOrderAndCancellationSQLitePostgres",
+          "required_paths": ["TestNodeProbeHandlersReverseOrderAndCancellationSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestConfigImportRollbackFencesNodeProbeSQLitePostgres",
+          "required_paths": ["TestConfigImportRollbackFencesNodeProbeSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeSharedKeyLastUsedNeverMovesBackwardsSQLitePostgres",
+          "required_paths": ["TestNodeProbeSharedKeyLastUsedNeverMovesBackwardsSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeDetailReadsWhileWriterHoldsLocksSQLitePostgres",
+          "required_paths": ["TestNodeProbeDetailReadsWhileWriterHoldsLocksSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeFencingAndTrustIgnoreUnrelatedCiphertextSQLitePostgres",
+          "required_paths": ["TestNodeProbeFencingAndTrustIgnoreUnrelatedCiphertextSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestLegacyTrustDoesNotLockBoundKeyPostgres",
+          "required_paths": ["TestLegacyTrustDoesNotLockBoundKeyPostgres"]
+        },
+        {
+          "name": "TestNodeProbeWriteFenceSurvivesCancellationSQLitePostgres",
+          "required_paths": ["TestNodeProbeWriteFenceSurvivesCancellationSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeProbeWriteGuardRechecksAuthorityAfterPrepare",
+          "required_paths": ["TestNodeProbeWriteGuardRechecksAuthorityAfterPrepare/postgres"]
+        },
+        {
           "name": "TestOverviewTrafficCapPreservesNewestBuckets",
           "required_paths": [
             "TestOverviewTrafficCapPreservesNewestBuckets/postgres/sample/exact_limit",
@@ -2364,6 +2408,14 @@
       "timeout": "45m",
       "tests": [
         {
+          "name": "TestNodeProbeGenerationMigrationPostgres",
+          "required_paths": [
+            "TestNodeProbeGenerationMigrationPostgres/UpgradeAndReupgrade",
+            "TestNodeProbeGenerationMigrationPostgres/GenerationChanges",
+            "TestNodeProbeGenerationMigrationPostgres/TriggerDrift"
+          ]
+        },
+        {
           "name": "TestProcessingBackfillQuotaMigrationPostgres",
           "required_paths": [
             "TestProcessingBackfillQuotaMigrationPostgres",
@@ -3673,6 +3725,16 @@
     }
   ],
   "exclusions": [
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestNodeProbeStalledHandshakeTimesOutAndAppliesFailure",
+      "reason": "node_probe_test.go invokes newMigratedNodeProbeFixture with literal sqlite. This test exercises a stalled SSH handshake; the PostgreSQL admission and apply paths are covered by the registered dual-engine probe tests."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestNodeProbeSQLiteLastUsedComparesInstantsAcrossOffsets",
+      "reason": "node_probe_test.go invokes newMigratedNodeProbeFixture with literal sqlite to exercise SQLite DATETIME offsets. The shared-key last-use test registers the PostgreSQL path separately."
+    },
     {
       "package": "./internal/database",
       "name": "TestExportRawFingerprintMigrationSQLite",
