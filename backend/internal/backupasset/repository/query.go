@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -606,6 +607,35 @@ type ManagedRsyncPointReadSession struct {
 	tokenReleased bool
 }
 
+// repositorySourceReadMode keeps caller-owned row locks separate from standalone
+// PostgreSQL snapshots, whose repeatable-read transaction supplies consistency.
+type repositorySourceReadMode bool
+
+const (
+	repositorySourceReadSnapshot repositorySourceReadMode = false
+	repositorySourceReadLocked   repositorySourceReadMode = true
+)
+
+func (mode repositorySourceReadMode) query(ctx context.Context, tx *gorm.DB) *gorm.DB {
+	query := tx.WithContext(ctx)
+	if mode == repositorySourceReadLocked {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	return query
+}
+
+func (service *Service) withRepositorySourceSnapshot(ctx context.Context, read func(*gorm.DB, repositorySourceReadMode) error) error {
+	db := service.db.WithContext(ctx)
+	if db.Name() == "postgres" {
+		return db.Transaction(func(tx *gorm.DB) error {
+			return read(tx, repositorySourceReadSnapshot)
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		return read(tx, repositorySourceReadLocked)
+	})
+}
+
 // ResolveRsyncRestoreSource is the Repository-owned boundary for resolving a
 // portable Recovery source ref. The ref intentionally has no caller-supplied
 // Task ID, root, locator, or filesystem path; later resolution derives those
@@ -626,8 +656,8 @@ func (service *Service) ResolveRsyncRestoreSource(ctx context.Context, ref provi
 	return resolveRsyncRestoreSourceWithDependencies(ctx, ref, rsyncRestoreSourceResolverDependencies{
 		loadSnapshot: func(ctx context.Context, ref provider.RsyncRestoreSourceRef) (rsyncRestoreDurableSnapshot, error) {
 			var snapshot rsyncRestoreDurableSnapshot
-			err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+			err := service.withRepositorySourceSnapshot(ctx, func(tx *gorm.DB, mode repositorySourceReadMode) error {
+				loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref, mode)
 				if err == nil {
 					snapshot = loaded
 				}
@@ -1053,12 +1083,13 @@ func (service *Service) loadRsyncRestoreDurableSnapshot(
 	ctx context.Context,
 	tx *gorm.DB,
 	ref provider.RsyncRestoreSourceRef,
+	mode repositorySourceReadMode,
 ) (rsyncRestoreDurableSnapshot, error) {
-	plan, point, declared, err := loadRsyncRestoreSourceBinding(ctx, tx, ref)
+	plan, point, declared, err := loadRsyncRestoreSourceBinding(ctx, tx, ref, mode)
 	if err != nil {
 		return rsyncRestoreDurableSnapshot{}, err
 	}
-	runtime, err := loadLockedExactManagedRsyncPublicationRuntime(ctx, tx, *point.ProducingTaskID)
+	runtime, err := loadExactManagedRsyncPublicationRuntimeForSource(ctx, tx, *point.ProducingTaskID, mode)
 	if err != nil || runtime.task.ID != *point.ProducingTaskID || runtime.repository.ID != plan.RepositoryID ||
 		runtime.repository.ProviderKind != string(backupasset.ProviderRsync) || runtime.repository.RepositoryIdentity == nil ||
 		runtime.repository.CapabilityRevision <= 0 {
@@ -1078,34 +1109,35 @@ func (service *Service) loadRsyncRestoreDurableSnapshot(
 	}, nil
 }
 
-func loadLockedExactManagedRsyncPublicationRuntime(
+func loadExactManagedRsyncPublicationRuntimeForSource(
 	ctx context.Context,
 	tx *gorm.DB,
 	taskID uint,
+	mode repositorySourceReadMode,
 ) (managedRsyncPublicationRuntime, error) {
 	if tx == nil || taskID == 0 {
 		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
 	}
 	var lockedTask model.Task
-	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded := mode.query(ctx, tx).
 		Where("id = ? AND archived_at IS NULL", taskID).Limit(1).Find(&lockedTask)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedTask.ID != taskID {
 		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
 	}
 	var lockedLink model.TaskRepositoryLink
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("task_id = ? AND unlinked_at IS NULL", taskID).Limit(1).Find(&lockedLink)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedLink.TaskID == nil || *lockedLink.TaskID != taskID {
 		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
 	}
 	var lockedRepository model.BackupRepository
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("id = ?", lockedLink.RepositoryID).Limit(1).Find(&lockedRepository)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedRepository.ID != lockedLink.RepositoryID {
 		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
 	}
 	var lockedBinding model.RepositoryAccessBinding
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("repository_id = ? AND status = ?", lockedRepository.ID, bindingStatusActive).Limit(1).Find(&lockedBinding)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedBinding.RepositoryID != lockedRepository.ID {
 		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
@@ -1136,8 +1168,8 @@ func (service *Service) revalidateRsyncRestoreSnapshot(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		current, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+	return service.withRepositorySourceSnapshot(ctx, func(tx *gorm.DB, mode repositorySourceReadMode) error {
+		current, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref, mode)
 		if err != nil || !reflect.DeepEqual(current, snapshot) || len(current.declared) != len(expected) {
 			return invalidRsyncRestoreSourceRef()
 		}
@@ -1172,8 +1204,8 @@ func (service *Service) revalidateRsyncRestoreSource(
 		ctx = context.Background()
 	}
 	var current rsyncRestoreDurableSnapshot
-	if err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+	if err := service.withRepositorySourceSnapshot(ctx, func(tx *gorm.DB, mode repositorySourceReadMode) error {
+		loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref, mode)
 		if err != nil || !reflect.DeepEqual(loaded, snapshot) {
 			return invalidRsyncRestoreSourceRef()
 		}
@@ -1203,8 +1235,8 @@ func (service *Service) captureRecoveryRsyncAuthoritySnapshot(
 		ctx = context.Background()
 	}
 	var snapshot recoveryRsyncAuthoritySnapshot
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		loaded, err := service.loadRecoveryRsyncAuthoritySnapshotTx(ctx, tx, ref)
+	err := service.withRepositorySourceSnapshot(ctx, func(tx *gorm.DB, mode repositorySourceReadMode) error {
+		loaded, err := service.loadRecoveryRsyncAuthoritySnapshotForMode(ctx, tx, ref, mode)
 		if err == nil {
 			snapshot = loaded
 		}
@@ -1225,8 +1257,8 @@ func (service *Service) revalidateRecoveryRsyncAuthoritySnapshot(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		current, err := service.loadRecoveryRsyncAuthoritySnapshotTx(ctx, tx, ref)
+	return service.withRepositorySourceSnapshot(ctx, func(tx *gorm.DB, mode repositorySourceReadMode) error {
+		current, err := service.loadRecoveryRsyncAuthoritySnapshotForMode(ctx, tx, ref, mode)
 		if err != nil || !reflect.DeepEqual(current, expected) {
 			return invalidRsyncRestoreSourceRef()
 		}
@@ -1239,23 +1271,32 @@ func (service *Service) loadRecoveryRsyncAuthoritySnapshotTx(
 	tx *gorm.DB,
 	ref provider.RsyncRestoreSourceRef,
 ) (recoveryRsyncAuthoritySnapshot, error) {
+	return service.loadRecoveryRsyncAuthoritySnapshotForMode(ctx, tx, ref, repositorySourceReadLocked)
+}
+
+func (service *Service) loadRecoveryRsyncAuthoritySnapshotForMode(
+	ctx context.Context,
+	tx *gorm.DB,
+	ref provider.RsyncRestoreSourceRef,
+	mode repositorySourceReadMode,
+) (recoveryRsyncAuthoritySnapshot, error) {
 	if service == nil || tx == nil {
 		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
 	}
-	durable, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+	durable, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref, mode)
 	if err != nil {
 		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
 	}
 
 	var point model.RecoveryPoint
-	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded := mode.query(ctx, tx).
 		Where("id = ? AND repository_id = ?", ref.RecoveryPointID, ref.RepositoryID).Limit(1).Find(&point)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || point.ProducingTaskID == nil || *point.ProducingTaskID == 0 {
 		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
 	}
 
 	var task model.Task
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("id = ? AND archived_at IS NULL", *point.ProducingTaskID).Limit(1).Find(&task)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || task.ID != *point.ProducingTaskID || task.NodeID == 0 ||
 		bindingProviderForTask(task) != backupasset.ProviderRsync {
@@ -1263,7 +1304,7 @@ func (service *Service) loadRecoveryRsyncAuthoritySnapshotTx(
 	}
 
 	var link model.TaskRepositoryLink
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("task_id = ? AND repository_id = ? AND unlinked_at IS NULL", task.ID, ref.RepositoryID).Limit(1).Find(&link)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || link.TaskID == nil || *link.TaskID != task.ID ||
 		link.NodeIDSnapshot != task.NodeID {
@@ -1271,7 +1312,7 @@ func (service *Service) loadRecoveryRsyncAuthoritySnapshotTx(
 	}
 
 	var repository model.BackupRepository
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("id = ?", ref.RepositoryID).Limit(1).Find(&repository)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || repository.RepositoryIdentity == nil ||
 		repository.ProviderKind != string(backupasset.ProviderRsync) || repository.ID != durable.repositoryID ||
@@ -1280,7 +1321,7 @@ func (service *Service) loadRecoveryRsyncAuthoritySnapshotTx(
 	}
 
 	var binding model.RepositoryAccessBinding
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	loaded = mode.query(ctx, tx).
 		Where("repository_id = ? AND status = ?", ref.RepositoryID, bindingStatusActive).Limit(1).Find(&binding)
 	if loaded.Error != nil || loaded.RowsAffected != 1 || binding.RepositoryID != repository.ID ||
 		binding.EncryptedConfig == "" {
@@ -1398,9 +1439,10 @@ func loadRsyncRestoreSourceBinding(
 	ctx context.Context,
 	tx *gorm.DB,
 	ref provider.RsyncRestoreSourceRef,
+	mode repositorySourceReadMode,
 ) (model.BackupAssetRecoveryPlan, model.RecoveryPoint, []rsyncRestoreDeclaredEntry, error) {
 	var plan model.BackupAssetRecoveryPlan
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", ref.PlanID).First(&plan).Error; err != nil ||
+	if err := mode.query(ctx, tx).Where("id = ?", ref.PlanID).First(&plan).Error; err != nil ||
 		plan.RepositoryID != ref.RepositoryID || plan.RecoveryPointID != ref.RecoveryPointID ||
 		plan.CatalogGenerationID != ref.CatalogGenerationID || plan.BindingDigest != ref.PlanBindingDigest ||
 		plan.SelectionDigest != ref.SelectionDigest || plan.SourceRevisionDigest != ref.SourceRevisionDigest ||
@@ -1409,7 +1451,7 @@ func loadRsyncRestoreSourceBinding(
 		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
 	}
 	var point model.RecoveryPoint
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := mode.query(ctx, tx).
 		Where("id = ? AND repository_id = ?", ref.RecoveryPointID, ref.RepositoryID).First(&point).Error; err != nil ||
 		point.ProducingTaskID == nil || point.ManifestDigest != ref.ManifestDigest ||
 		plan.EncryptedSourceLocator != point.EncryptedProviderLocator ||
@@ -1424,7 +1466,7 @@ func loadRsyncRestoreSourceBinding(
 		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
 	}
 	var generation model.CatalogGeneration
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := mode.query(ctx, tx).
 		Where("id = ? AND recovery_point_id = ? AND state = ? AND is_active = ?", ref.CatalogGenerationID, ref.RecoveryPointID, catalog.GenerationComplete, true).
 		First(&generation).Error; err != nil || generation.SourceFingerprint != point.SourceFingerprint ||
 		generation.ManifestID == nil || backupasset.ValidateOpaqueID(*generation.ManifestID) != nil ||
@@ -1433,29 +1475,30 @@ func loadRsyncRestoreSourceBinding(
 		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
 	}
 	var manifest model.RecoveryPointManifest
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := mode.query(ctx, tx).
 		Where("id = ? AND recovery_point_id = ? AND is_active = ?", *generation.ManifestID, point.ID, true).
 		First(&manifest).Error; err != nil || manifest.Revision <= 0 || manifest.DigestAlgorithm != "sha256" ||
 		manifest.Digest != point.ManifestDigest || manifest.Completeness != string(backupasset.ManifestComplete) ||
 		manifest.EntryCount != point.EntryCount || manifest.LogicalBytes != point.LogicalBytes {
 		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
 	}
-	declared, err := lockExactRsyncRestorePlanItems(ctx, tx, plan, point, generation)
+	declared, err := loadExactRsyncRestorePlanItems(ctx, tx, plan, point, generation, mode)
 	if err != nil {
 		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
 	}
 	return plan, point, declared, nil
 }
 
-func lockExactRsyncRestorePlanItems(
+func loadExactRsyncRestorePlanItems(
 	ctx context.Context,
 	tx *gorm.DB,
 	plan model.BackupAssetRecoveryPlan,
 	point model.RecoveryPoint,
 	generation model.CatalogGeneration,
+	mode repositorySourceReadMode,
 ) ([]rsyncRestoreDeclaredEntry, error) {
 	var items []model.BackupAssetRecoveryPlanItem
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := mode.query(ctx, tx).
 		Where("plan_id = ?", plan.ID).Order("ordinal ASC, id ASC").Find(&items).Error; err != nil || len(items) == 0 {
 		return nil, invalidRsyncRestoreSourceRef()
 	}
@@ -1478,7 +1521,7 @@ func lockExactRsyncRestorePlanItems(
 	}
 
 	var entries []model.CatalogEntry
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := mode.query(ctx, tx).
 		Where("generation_id = ? AND recovery_point_id = ? AND entry_id IN ?", generation.ID, point.ID, entryIDs).
 		Find(&entries).Error; err != nil || len(entries) != len(items) {
 		return nil, invalidRsyncRestoreSourceRef()

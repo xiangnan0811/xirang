@@ -342,7 +342,7 @@ func runRsyncCatalogStrongFingerprintUpgrade(t *testing.T, engine string) {
 		}
 		var committedRequest provider.RsyncCommittedPointReadRequest
 		if err := db.Transaction(func(tx *gorm.DB) error {
-			runtimeAccess, err := loadLockedExactManagedRsyncPublicationRuntime(context.Background(), tx, *fixture.point.ProducingTaskID)
+			runtimeAccess, err := loadExactManagedRsyncPublicationRuntimeForSource(context.Background(), tx, *fixture.point.ProducingTaskID, repositorySourceReadLocked)
 			if err != nil {
 				return err
 			}
@@ -2413,7 +2413,11 @@ func newRsyncRestoreResolverFixture(t *testing.T) *rsyncRestoreResolverFixture {
 
 func newRsyncRestoreResolverFixtureWithAlternate(t *testing.T, alternate bool) *rsyncRestoreResolverFixture {
 	t.Helper()
-	fixture := newRsyncPublicationFixture(t)
+	return rsyncRestoreResolverFixtureFromPublication(t, newRsyncPublicationFixture(t), alternate)
+}
+
+func rsyncRestoreResolverFixtureFromPublication(t *testing.T, fixture *rsyncPublicationFixture, alternate bool) *rsyncRestoreResolverFixture {
+	t.Helper()
 	markerKey, err := fixture.service.rsyncMarkerKey(context.Background(), fixture.repository.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -2513,10 +2517,11 @@ func newRsyncRestoreResolverFixtureWithAlternate(t *testing.T, alternate bool) *
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.AutoMigrate(&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{}); err != nil {
-		t.Fatal(err)
+	if fixture.db.Name() != "postgres" {
+		if err := fixture.db.AutoMigrate(&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{}); err != nil {
+			t.Fatal(err)
+		}
 	}
-
 	var point model.RecoveryPoint
 	if err := fixture.db.First(&point, "id = ?", state.attempt.RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
@@ -2547,9 +2552,17 @@ func newRsyncRestoreResolverFixtureWithAlternate(t *testing.T, alternate bool) *
 	if err := fixture.db.Create(&generation).Error; err != nil {
 		t.Fatal(err)
 	}
+	requesterID := uint(1)
+	if fixture.db.Name() == "postgres" {
+		requester := model.User{Username: "rsync-restore-requester", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator"}
+		if err := fixture.db.Create(&requester).Error; err != nil {
+			t.Fatal(err)
+		}
+		requesterID = requester.ID
+	}
 	plan := model.BackupAssetRecoveryPlan{
 		ID:                       strings.Repeat("5", 32),
-		RequesterID:              1,
+		RequesterID:              requesterID,
 		Endpoint:                 "recovery_execute",
 		IdempotencyKeyDigest:     strings.Repeat("6", 64),
 		RepositoryID:             fixture.repository.ID,
@@ -2574,8 +2587,8 @@ func newRsyncRestoreResolverFixtureWithAlternate(t *testing.T, alternate bool) *
 		CapabilityRevision:       "capability-revision",
 		ConflictPolicy:           "fail_on_conflict",
 		OperationSetDigest:       strings.Repeat("e", 64),
-		DeleteSetDigest:          strings.Repeat("f", 64),
-		SecurityDecision:         "clean",
+		DeleteSetDigest:          "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf",
+		SecurityDecision:         "allow_clean",
 		SecurityDecisionDigest:   strings.Repeat("1", 64),
 		SecurityFindingSetDigest: strings.Repeat("2", 64),
 		SecurityPolicyRevision:   "security-revision",

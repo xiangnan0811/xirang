@@ -2170,6 +2170,26 @@
           ]
         },
         {
+          "name": "TestRecoveryRsyncAuthorityPostgresSnapshotRemainsCoherentAcrossCommit",
+          "required_paths": [
+            "TestRecoveryRsyncAuthorityPostgresSnapshotRemainsCoherentAcrossCommit"
+          ]
+        },
+        {
+          "name": "TestRecoveryRsyncSourceAuthorityPostgresCallerTransactionExcludesWriter",
+          "required_paths": [
+            "TestRecoveryRsyncSourceAuthorityPostgresCallerTransactionExcludesWriter"
+          ]
+        },
+        {
+          "name": "TestRsyncRestorePostgresSnapshotsDoNotBlockOnUncommittedWriter",
+          "required_paths": [
+            "TestRsyncRestorePostgresSnapshotsDoNotBlockOnUncommittedWriter/binding_revocation",
+            "TestRsyncRestorePostgresSnapshotsDoNotBlockOnUncommittedWriter/point_provenance",
+            "TestRsyncRestorePostgresSnapshotsDoNotBlockOnUncommittedWriter/producer_archived"
+          ]
+        },
+        {
           "name": "TestRsyncCatalogStrongFingerprintUpgradePostgres",
           "required_paths": [
             "TestRsyncCatalogStrongFingerprintUpgradePostgres",

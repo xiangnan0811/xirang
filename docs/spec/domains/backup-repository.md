@@ -206,6 +206,8 @@ rollback capability 独立于临时 publication state 和 expiry 投影，GET �
 
 `RecoveryEligibilityAuthority.ObserveRecoveryAuthority` 与 `RecoveryAuthorityRevalidator.RevalidateRecoveryAuthorityTx` 分别拥有有界外部观察和 caller 事务内的耐久事实重验。流程为短事务 capture → 事务外 SSH/SFTP/Repository pinned-tree/Processing artifact 观察 → 短锁定事务 revalidation。外部 I/O 不得放 DB 事务内。
 
+Repository 独立解析、捕获与重验 Rsync 恢复源时，每一阶段在 PostgreSQL 同一个只读可重复读快照中检查该阶段的持久来源行。读取可与发布和保留事务的行锁并行，外部观察前后仍分别从新快照重验绑定与来源证据。密钥和设置沿用各自的读取服务。调用方在签发或执行恢复动作的事务内重验来源时，仍持有原有的行锁。
+
 外部观察完成后，重验事务先锁恢复计划并核对绑定摘要和转换版本，再锁目标和源权威。预检持久化也先锁计划，因此同一计划的观察收尾和预检提交可以安全等待彼此完成。
 
 同一事务读取目标根及其节点和 SSH 凭据时，先锁节点和凭据，再锁目标根设置行。计划目标枚举、准入捕获与重验、对账读取沿用登记和撤销的锁序，并在持锁期间核对根和凭据版本。变更与补偿按节点、目标根、幂等回执的顺序操作。节点已被删除时，补偿仍在同一事务内按目标根和回执的精确状态判定能否恢复。对账清单使用允许行锁的可重复读事务。
