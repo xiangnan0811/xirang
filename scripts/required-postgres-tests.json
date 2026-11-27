@@ -2214,6 +2214,12 @@
           ]
         },
         {
+          "name": "TestRsyncLifecycleDeletionAuthorityLockPostgres",
+          "required_paths": [
+            "TestRsyncLifecycleDeletionAuthorityLockPostgres"
+          ]
+        },
+        {
           "name": "TestPublicationLeaseDeadlinePrecisionPostgres",
           "required_paths": [
             "TestPublicationLeaseDeadlinePrecisionPostgres",
@@ -2361,6 +2367,16 @@
           "name": "TestLifecycleClaimAndAdvanceUseOnePostgresLockOrder",
           "required_paths": [
             "TestLifecycleClaimAndAdvanceUseOnePostgresLockOrder"
+          ]
+        },
+        {
+          "name": "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres",
+          "required_paths": [
+            "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres",
+            "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres/caller_cancellation",
+            "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres/statement_cancellation",
+            "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres/resolver_statement_cancellation",
+            "TestLifecycleRsyncProviderDeleteAuthorityLockPostgres/receipt_deadline"
           ]
         },
         {

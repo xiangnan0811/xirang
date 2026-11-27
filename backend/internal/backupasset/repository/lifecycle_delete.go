@@ -39,6 +39,29 @@ func lifecycleDeleteRuntimeError(err error) error {
 	return lifecycleDeletionUnavailable()
 }
 
+// rsyncLifecycleLockError keeps database causes inspectable without exposing
+// database messages, which may contain private runtime authority.
+type rsyncLifecycleLockError struct{ cause error }
+
+func (err rsyncLifecycleLockError) Error() string { return "Rsync lifecycle database lock failed" }
+func (err rsyncLifecycleLockError) Unwrap() error { return err.cause }
+
+func rsyncLifecycleDeleteLockError(tx *gorm.DB, err error) error {
+	if tx != nil && tx.Name() == "postgres" {
+		var state interface{ SQLState() string }
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return rsyncLifecycleLockError{cause: err}
+		}
+		if errors.As(err, &state) {
+			switch state.SQLState() {
+			case "57014", "55P03", "40P01", "40001":
+				return rsyncLifecycleLockError{cause: err}
+			}
+		}
+	}
+	return lifecycleDeletionUnavailable()
+}
+
 func lifecycleDeleteLocator(point model.RecoveryPoint) string {
 	if strings.TrimSpace(point.EncryptedProviderLocator) != "" {
 		return point.EncryptedProviderLocator
@@ -339,7 +362,7 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 	var lockedRepository model.BackupRepository
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", repository.ID).First(&lockedRepository).Error; err != nil {
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	if lockedRepository.ID != repository.ID ||
 		lockedRepository.ProviderKind != string(backupasset.ProviderRsync) ||
@@ -351,7 +374,7 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 	var task model.Task
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", attempt.TaskID).First(&task).Error; err != nil {
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	if bindingProviderForTask(task) != backupasset.ProviderRsync || task.NodeID == 0 {
 		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rsync lifecycle Task identity changed")
@@ -362,18 +385,18 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rsync TaskRun authority changed")
 		}
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	var link model.TaskRepositoryLink
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND repository_id = ?",
 			attempt.TaskRepositoryLinkID, repository.ID).First(&link).Error; err != nil {
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	var bindingRow model.RepositoryAccessBinding
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&bindingRow).Error; err != nil {
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	stored, err := decodeStoredBindingDocument(bindingRow.EncryptedConfig)
 	if err != nil || stored.ManagedRsyncV2 == nil || stored.V1 != nil {
@@ -392,7 +415,7 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 		if errors.Is(err, backupasset.ErrConflict) {
 			return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rsync runtime Node identity changed")
 		}
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	if task.ID != attempt.TaskID || task.NodeID != binding.NodeID ||
 		!authoritativeTaskRunForTask(taskRun, task) ||
@@ -418,7 +441,7 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 	}
 	markerKey, err := service.publication.rsyncMarkerKeyTx(ctx, tx, repository.ID)
 	if err != nil {
-		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
+		return provider.AccessBinding{}, rsyncLifecycleDeleteLockError(tx, err)
 	}
 	source := managedRsyncSourceFingerprint(markerKey, binding, point.ID)
 	if source == "" || source != point.SourceFingerprint {
