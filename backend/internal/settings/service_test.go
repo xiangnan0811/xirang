@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2469,6 +2471,133 @@ func TestGetEffectiveDBErrorKeepsExpiredCache(t *testing.T) {
 
 	if got := svc.GetEffective("login.rate_limit"); got != "77" {
 		t.Fatalf("DB error should return stale cached value, got %q", got)
+	}
+}
+
+func TestGetEffectiveDoesNotCacheReadAcrossInvalidation(t *testing.T) {
+	db := setupRecoveryTargetRootTestDB(t)
+	svc := NewService(db)
+	const key = "login.rate_limit"
+	if err := svc.Update(key, "30"); err != nil {
+		t.Fatal(err)
+	}
+
+	queried := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	var blocked atomic.Bool
+	if err := db.Callback().Query().After("gorm:query").Register("test:pause_settings_read", func(tx *gorm.DB) {
+		if tx.Error == nil && blocked.CompareAndSwap(false, true) {
+			close(queried)
+			<-release
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	readerDone := make(chan struct{})
+	var writerDone chan struct{}
+	var got string
+	go func() {
+		defer close(readerDone)
+		got = svc.GetEffective(key)
+	}()
+	t.Cleanup(func() {
+		unblock()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for _, done := range []<-chan struct{}{readerDone, writerDone} {
+			if done == nil {
+				continue
+			}
+			select {
+			case <-done:
+			case <-timer.C:
+				t.Error("settings reader or writer did not finish during cleanup")
+				return
+			}
+		}
+	})
+	select {
+	case <-queried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("settings query did not reach the barrier")
+	}
+	writerDone = make(chan struct{})
+	var updateErr error
+	go func() {
+		defer close(writerDone)
+		updateErr = svc.Update(key, "50")
+	}()
+	select {
+	case <-writerDone:
+		if updateErr != nil {
+			t.Fatalf("update while read is paused: %v", updateErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("update did not finish while settings read was paused")
+	}
+	unblock()
+	select {
+	case <-readerDone:
+		if got != "30" {
+			t.Fatalf("paused read = %q, want the value read before the update", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("paused settings read did not finish")
+	}
+	if got := svc.GetEffective(key); got != "50" {
+		t.Fatalf("read after update = %q, want committed value 50", got)
+	}
+}
+
+func TestTransactionRollbackPreservesStaleCache(t *testing.T) {
+	for _, operation := range []string{"upsert", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			db := setupRecoveryTargetRootTestDB(t)
+			svc := NewService(db)
+			const key = "login.rate_limit"
+			if err := svc.Update(key, "30"); err != nil {
+				t.Fatal(err)
+			}
+			if got := svc.GetEffective(key); got != "30" {
+				t.Fatalf("initial effective value = %q, want 30", got)
+			}
+			rollback := errors.New("intentional rollback")
+			err := db.Transaction(func(tx *gorm.DB) error {
+				if operation == "upsert" {
+					if err := svc.UpdateWithTxContext(context.Background(), tx, key, "50"); err != nil {
+						return err
+					}
+				} else if err := svc.DeleteWithTxContext(context.Background(), tx, key); err != nil {
+					return err
+				}
+				return rollback
+			})
+			if !errors.Is(err, rollback) {
+				t.Fatalf("transaction error = %v, want rollback", err)
+			}
+			var row model.SystemSetting
+			if err := db.Where("key = ?", key).Take(&row).Error; err != nil || row.Value != "30" {
+				t.Fatalf("rolled-back row = %q, error = %v", row.Value, err)
+			}
+			svc.mu.Lock()
+			cached := svc.cache[key]
+			cached.expiresAt = time.Now().Add(-time.Minute)
+			svc.cache[key] = cached
+			svc.mu.Unlock()
+			sqlDB, err := db.DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sqlDB.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := svc.GetEffective(key); got != "30" {
+				t.Fatalf("effective value after rollback and DB failure = %q, want stale 30", got)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -370,6 +371,11 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 		return fmt.Errorf("settings handler is unavailable")
 	}
 	containsFoundation := false
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	foundationOverlay := make(map[string]string)
 	for key, value := range values {
 		if settings.IsBackupAssetFoundationSetting(key) {
@@ -378,23 +384,23 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 		}
 	}
 	persist := func(persistCtx context.Context) error {
-		return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
-			for key, value := range values {
-				if err := h.svc.UpdateWithTxContext(persistCtx, tx, key, value); err != nil {
+		if err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
+			for _, key := range keys {
+				if err := h.svc.UpdateWithTxContext(persistCtx, tx, key, values[key]); err != nil {
 					return err
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		h.svc.InvalidateCachedValues(keys)
+		return nil
 	}
 	if !containsFoundation {
 		return persist(ctx)
 	}
 	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
-		keys := make([]string, 0, len(values))
-		for key := range values {
-			keys = append(keys, key)
-		}
 		overrides, err := h.svc.CaptureSettingOverridesContext(ctx, keys)
 		if err != nil {
 			return err
@@ -422,9 +428,13 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 		}
 		override := map[string]string{key: fallback}
 		persist := func(persistCtx context.Context) error {
-			return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
+			if err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
 				return h.svc.DeleteWithTxContext(persistCtx, tx, key)
-			})
+			}); err != nil {
+				return err
+			}
+			h.svc.InvalidateCachedValues([]string{key})
+			return nil
 		}
 		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, override, persist)
 	})

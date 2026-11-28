@@ -1088,22 +1088,14 @@ func setupThreeEntrypointEnablementHarness(t *testing.T, snapshot ga.ReadinessSn
 	if err != nil {
 		t.Fatal(err)
 	}
+	migrateConfigAssetGraphDB(t, db)
 	if err := db.AutoMigrate(
-		&model.SystemSetting{},
-		&model.CredentialAuditEvent{},
-		&model.Node{},
-		&model.Policy{},
-		&model.Task{},
-		&model.SSHKey{},
-		&model.BackupRepository{},
-		&model.RecoveryPoint{},
 		&model.CatalogGeneration{},
 		&model.CatalogEntry{},
 		&model.WrappedDomainKey{},
 		&model.BackupAssetInstallation{},
 		&model.BackupAssetInventoryRun{},
 		&model.BackupAssetRepositoryConflict{},
-		&model.BackupAssetManagedHistoryLatch{},
 	); err != nil {
 		t.Fatalf("migrate three-entrypoint harness: %v", err)
 	}

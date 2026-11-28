@@ -503,6 +503,14 @@
           "required_paths": []
         },
         {
+          "name": "TestConfigImportCommittedCacheVisibilityPostgres",
+          "required_paths": [
+            "TestConfigImportCommittedCacheVisibilityPostgres",
+            "TestConfigImportCommittedCacheVisibilityPostgres/success",
+            "TestConfigImportCommittedCacheVisibilityPostgres/compensation"
+          ]
+        },
+        {
           "name": "TestConfigImportCreateFailureRollsBackEarlierRowsPostgres",
           "required_paths": [
             "TestConfigImportCreateFailureRollsBackEarlierRowsPostgres"
@@ -1279,6 +1287,17 @@
           "name": "TestSSHKeyRotationPostgres",
           "required_paths": [
             "TestSSHKeyRotationPostgres"
+          ]
+        },
+        {
+          "name": "TestSettingsCommittedCacheVisibilityPostgres",
+          "required_paths": [
+            "TestSettingsCommittedCacheVisibilityPostgres",
+            "TestSettingsCommittedCacheVisibilityPostgres/ordinary_put",
+            "TestSettingsCommittedCacheVisibilityPostgres/mixed_put",
+            "TestSettingsCommittedCacheVisibilityPostgres/ordinary_delete",
+            "TestSettingsCommittedCacheVisibilityPostgres/foundation_delete",
+            "TestSettingsCommittedCacheVisibilityPostgres/overlapping_read"
           ]
         },
         {

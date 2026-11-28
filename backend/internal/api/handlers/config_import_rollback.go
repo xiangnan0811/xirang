@@ -159,6 +159,17 @@ func (snapshot *configImportRollbackSnapshot) seal(ctx context.Context, tx *gorm
 	return snapshot.graph.seal(ctx, tx)
 }
 
+func (snapshot *configImportRollbackSnapshot) invalidateSettingsCache(settingsSvc *settings.Service) {
+	if snapshot == nil || settingsSvc == nil || len(snapshot.settings.current) == 0 {
+		return
+	}
+	settingKeys := make([]string, 0, len(snapshot.settings.current))
+	for key := range snapshot.settings.current {
+		settingKeys = append(settingKeys, key)
+	}
+	settingsSvc.InvalidateCachedValues(settingKeys)
+}
+
 func (journal *configImportRollbackJournal) install(snapshot *configImportRollbackSnapshot) {
 	journal.mu.Lock()
 	journal.snapshot = snapshot
@@ -257,13 +268,7 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 		return err
 	}
 	journal.restored = true
-	if journal.settingsSvc != nil && len(snapshot.settings.current) > 0 {
-		settingKeys := make([]string, 0, len(snapshot.settings.current))
-		for key := range snapshot.settings.current {
-			settingKeys = append(settingKeys, key)
-		}
-		journal.settingsSvc.InvalidateCachedValues(settingKeys)
-	}
+	snapshot.invalidateSettingsCache(journal.settingsSvc)
 	return nil
 }
 

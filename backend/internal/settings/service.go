@@ -235,6 +235,7 @@ type Service struct {
 	mu                      sync.RWMutex
 	backupAssetMutationGate exclusiveMutationGate
 	cache                   map[string]cachedValue
+	cacheGeneration         map[string]uint64
 }
 
 // BackupAssetOverrideSnapshot is an opaque, exact database-override snapshot.
@@ -251,6 +252,7 @@ func NewService(db *gorm.DB) *Service {
 		db:                      db,
 		backupAssetMutationGate: newExclusiveMutationGate(),
 		cache:                   make(map[string]cachedValue),
+		cacheGeneration:         make(map[string]uint64),
 	}
 }
 
@@ -657,6 +659,7 @@ func (s *Service) GetEffective(key string) string {
 		s.mu.RUnlock()
 		return cv.value
 	}
+	generation := s.cacheGeneration[key]
 	s.mu.RUnlock()
 
 	// 缓存未命中，查 DB
@@ -680,7 +683,9 @@ func (s *Service) GetEffective(key string) string {
 
 	// 写入缓存
 	s.mu.Lock()
-	s.cache[key] = cachedValue{value: value, expiresAt: time.Now().Add(cacheTTL)}
+	if s.cacheGeneration[key] == generation {
+		s.cache[key] = cachedValue{value: value, expiresAt: time.Now().Add(cacheTTL)}
+	}
 	s.mu.Unlock()
 
 	return value
@@ -1551,17 +1556,18 @@ func (s *Service) UpdateContext(ctx context.Context, key, value string) error {
 	if err := s.upsert(s.db.WithContext(ctx), key, value); err != nil {
 		return err
 	}
-	s.invalidateCache(key)
+	s.InvalidateCachedValues([]string{key})
 	return nil
 }
 
-// UpdateWithTx 在指定事务内更新设置值（供 config import 使用）
+// UpdateWithTx persists a setting in the caller-owned transaction. The caller
+// must invalidate the affected cache entry after a successful commit.
 func (s *Service) UpdateWithTx(tx *gorm.DB, key, value string) error {
 	return s.UpdateWithTxContext(context.Background(), tx, key, value)
 }
 
-// UpdateWithTxContext updates one setting through the caller-owned transaction
-// while binding every database operation to the supplied context.
+// UpdateWithTxContext persists a setting in the caller-owned transaction using
+// the supplied context. The caller must invalidate it after a successful commit.
 func (s *Service) UpdateWithTxContext(ctx context.Context, tx *gorm.DB, key, value string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1578,7 +1584,6 @@ func (s *Service) UpdateWithTxContext(ctx context.Context, tx *gorm.DB, key, val
 	if err := s.upsert(tx.WithContext(ctx), key, value); err != nil {
 		return err
 	}
-	s.invalidateCache(key)
 	return nil
 }
 
@@ -1617,9 +1622,7 @@ func (s *Service) UpdateManyContext(ctx context.Context, values map[string]strin
 	}); err != nil {
 		return err
 	}
-	for _, key := range keys {
-		s.invalidateCache(key)
-	}
+	s.InvalidateCachedValues(keys)
 	return nil
 }
 
@@ -1751,9 +1754,7 @@ func (s *Service) restoreSettingOverridesContext(
 	}); err != nil {
 		return err
 	}
-	for _, key := range snapshot.keys {
-		s.invalidateCache(key)
-	}
+	s.InvalidateCachedValues(snapshot.keys)
 	return nil
 }
 
@@ -1810,18 +1811,18 @@ func (s *Service) DeleteContext(ctx context.Context, key string) error {
 	if err := s.DeleteWithTxContext(ctx, s.db, key); err != nil {
 		return err
 	}
+	s.InvalidateCachedValues([]string{key})
 	return nil
 }
 
-// DeleteWithTx removes one database override through the caller's existing
-// transaction. Foundation-setting callers use it only after the admission
-// transition has drained, so a rollback leaves the prior persisted value.
+// DeleteWithTx removes an override in the caller-owned transaction. The caller
+// must invalidate the affected cache entry after a successful commit.
 func (s *Service) DeleteWithTx(tx *gorm.DB, key string) error {
 	return s.DeleteWithTxContext(context.Background(), tx, key)
 }
 
-// DeleteWithTxContext removes one override through a caller-owned transaction
-// while binding the delete to the supplied context.
+// DeleteWithTxContext removes an override in the caller-owned transaction using
+// the supplied context. The caller must invalidate it after a successful commit.
 func (s *Service) DeleteWithTxContext(ctx context.Context, tx *gorm.DB, key string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1842,26 +1843,25 @@ func (s *Service) DeleteWithTxContext(ctx context.Context, tx *gorm.DB, key stri
 	if err := tx.WithContext(ctx).Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
 		return err
 	}
-	s.invalidateCache(key)
 	return nil
 }
 
-// invalidateCache 清除指定 key 的缓存
-func (s *Service) invalidateCache(key string) {
-	s.mu.Lock()
-	delete(s.cache, key)
-	s.mu.Unlock()
-}
-
-// InvalidateCachedValues discards only the named values after a caller-owned
-// transaction restores their raw rows. It does not read or persist settings.
+// InvalidateCachedValues discards the named values after a caller-owned
+// transaction commits. It does not read or persist settings.
 func (s *Service) InvalidateCachedValues(keys []string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
 	for _, key := range keys {
-		s.invalidateCache(key)
+		delete(s.cache, key)
+		// Only registered settings have supported mutation paths; keeping versions
+		// for those keys bounds this map even if arbitrary names are supplied.
+		if findDef(key) != nil {
+			s.cacheGeneration[key]++
+		}
 	}
+	s.mu.Unlock()
 }
 
 // findDef O(1) 查找设置定义

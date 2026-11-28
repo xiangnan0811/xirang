@@ -31,6 +31,7 @@
 - legacy Foundation getter 逐项读取全部注册 Foundation keys，沿用 `GetEffective` 的缓存、DB > env > default 及读取错误回退语义，完整校验后再解析；不得遗漏 Search 等组后让校验器用静态默认替代真实值。它不是跨并发更新的原子快照，也不得增加 mutation gate 等待：持 gate 的 pending-audit flush、持 admission token 的 Provider/publication 最终审计仍会读取这些配置。原子快照、transition bundle 的既有所有权不变。
 - 使用 `ContentConfigFromValues`、`SearchOverlayConfigFromValues`、`ExportConfigFromValues`、`RecoveryConfigFromValues`、`FoundationTransitionConfigFromValues`。缺项/非法 bundle 在副作用前失败。
 - runtime 使用 `TransitionBackupAssetSettingsContext[WithRestore]`，persist/restore callback 接收 runtime context。`UpdateContext/UpdateWithTxContext/UpdateManyContext/DeleteContext/DeleteWithTxContext` 保持同一 context 进 GORM，不能内降级为 Background 或无 context adapter。
+- 批量设置更新按键名顺序写入。设置 API 和配置导入的 persist 回调在事务提交后失效本进程内实际写入的设置缓存，再返回 runtime；补偿在其恢复事务提交后再次失效对应缓存。
 - `Content.PrepareEnable` 接受显式 config；Search `PrepareWithConfig` 只校验 config/key、reconcile abandoned/overlay、list candidates，不同步 Build。候选 projection 归已有生命周期 worker 和 Search timeout，不继承 HTTP/settings deadline，不另起无 owner goroutine。
 - hot enable 仅在 persist、durable stamp、Content ready 和全部 fallible stage 成功后 `TryWake`。容量一、非阻塞、合并；失败/补偿无 wake；cold startup 无额外 wake。wake dequeue 后重读 committed config，disabled 时不做 reconcile/list/Build。Run 前 wake 吸收，重复 wake 不并行 pass，shutdown cancel/join woken Build、gauge 0。
 - gate waiter canceled 时 callback 不进入；forward work 全用一个有界 operation context。返回前取消/join 自有异步工作。

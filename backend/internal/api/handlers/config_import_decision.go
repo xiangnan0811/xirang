@@ -2561,6 +2561,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		})
 		if err == nil {
 			rollbackJournal.install(rollbackSnapshot)
+			rollbackSnapshot.invalidateSettingsCache(h.settingsSvc)
 		}
 		return err
 	}
