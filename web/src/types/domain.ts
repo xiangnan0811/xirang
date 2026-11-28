@@ -197,7 +197,14 @@ export interface NodeRecord {
   rawTags?: string;
   /** Latest manual connection test. Empty when this node has not been tested. */
   lastSeenAt: string;
+  /** Latest backup, formatted for display and CSV export. */
   lastBackupAt: string;
+  /**
+   * Exact instant of the latest backup, parsed from the server timestamp before formatting: whole signed
+   * epoch seconds plus nanoseconds (offset and sub-millisecond precision intact). Sort key only; omitted
+   * when there is no valid backup time.
+   */
+  lastBackupInstant?: { epochSeconds: number; nanoseconds: number };
   connectionLatencyMs?: number;
   maintenanceStart?: string;
   maintenanceEnd?: string;

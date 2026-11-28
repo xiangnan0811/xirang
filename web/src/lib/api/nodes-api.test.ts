@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "./core";
+import { ApiError, formatTime } from "./core";
 import { __test__, createNodesApi, isNodeProbeStaleError } from "./nodes-api";
 
 const PROBE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -197,6 +197,55 @@ describe("nodes api", () => {
     expect(node.rawTags).toBe(" prod,, web ,prod");
     expect(node.basePath).toBe("");
     expect(__test__.mapNode({ id: 5, name: "edge-3", host: "10.0.0.5" }).rawTags).toBe("");
+  });
+
+  it("derives the backup sort instant from the original RFC3339 timestamp with offset and nanoseconds", () => {
+    const map = (lastBackupAt?: string | null) =>
+      __test__.mapNode({ id: 9, name: "edge-9", host: "10.0.0.9", last_backup_at: lastBackupAt });
+    const instant = (value: string) => map(value).lastBackupInstant;
+    const fallBackEst = Date.UTC(2026, 10, 1, 6, 30) / 1000;
+
+    // Same wall clock on both sides of the America/New_York fall-back is one hour apart.
+    expect(instant("2026-11-01T01:30:00-04:00")).toEqual({ epochSeconds: fallBackEst - 3600, nanoseconds: 0 });
+    expect(instant("2026-11-01T01:30:00-05:00")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    // Different offsets naming the same moment produce the same instant.
+    expect(instant("2026-11-01T06:30:00Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    expect(instant("2026-11-01T12:00:00+05:30")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    // SQLite microseconds and Go nanoseconds stay distinct below the millisecond.
+    expect(instant("2026-11-01T06:30:00.123456Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 123_456_000 });
+    expect(instant("2026-11-01T06:30:00.123456789Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 123_456_789 });
+    expect(instant("2026-11-01T06:30:00.5Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 500_000_000 });
+    // Epoch and pre-epoch seconds are signed real values, not "missing".
+    expect(instant("1970-01-01T00:00:00Z")).toEqual({ epochSeconds: 0, nanoseconds: 0 });
+    expect(instant("1969-12-31T23:59:59.5Z")).toEqual({ epochSeconds: -1, nanoseconds: 500_000_000 });
+    expect(instant("2028-02-29T00:00:00Z")).toEqual({ epochSeconds: Date.UTC(2028, 1, 29) / 1000, nanoseconds: 0 });
+
+    // The display string (shown in the UI and exported to CSV) is unchanged.
+    expect(map("2026-11-01T01:30:00-04:00").lastBackupAt).toBe(formatTime("2026-11-01T01:30:00-04:00"));
+    expect(map(null).lastBackupAt).toBe("-");
+    expect(map("not-a-time").lastBackupAt).toBe("not-a-time");
+
+    for (const invalid of [
+      undefined,
+      null,
+      "",
+      "not-a-time",
+      "2026-11-01T01:30:00", // zone-less local time
+      "2026-11-01 01:30:00Z",
+      "2026-02-29T00:00:00Z",
+      "2026-04-31T00:00:00Z",
+      "2026-13-01T00:00:00Z",
+      "2026-11-00T00:00:00Z",
+      "2026-11-01T24:00:00Z",
+      "2026-11-01T01:60:00Z",
+      "2026-11-01T01:30:60Z",
+      "2026-11-01T01:30:00.1234567891Z",
+      "2026-11-01T01:30:00+24:00",
+      "2026-11-01T01:30:00+05:60",
+      "2026-11-01T01:30:00+0500",
+    ]) {
+      expect(map(invalid)).not.toHaveProperty("lastBackupInstant");
+    }
   });
 
   it("updateNode omits untouched maintenance fields and sends empty strings to clear them", async () => {

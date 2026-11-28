@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
-import { nodeStatusPriority, parseDateTime } from "@/pages/nodes-page.utils";
+import { compareLastBackupDesc, nodeStatusPriority } from "@/pages/nodes-page.utils";
 import {
   buildNodesCSV,
   CSV_IMPORT_BASE_PATH,
@@ -325,9 +325,7 @@ export function useNodesPageState() {
       if (sortBy === "name-desc") {
         return second.name.localeCompare(first.name);
       }
-      return (
-        parseDateTime(second.lastBackupAt) - parseDateTime(first.lastBackupAt)
-      );
+      return compareLastBackupDesc(first, second);
     });
     return list;
   }, [filteredNodes, sortBy]);

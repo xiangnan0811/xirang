@@ -394,9 +394,9 @@ export function NodesPage() {
               {groupedNodes.map(([tag, tagNodes]) => (
                 <details key={tag} open className="group">
                   <summary className="flex cursor-pointer items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm font-medium hover:bg-muted/60">
-                    <Layers className="size-4 text-muted-foreground" aria-hidden />
-                    {tag}
-                    <span className="ml-auto text-xs text-muted-foreground">{t("nodes.groupNodeCount", { count: tagNodes.length })}</span>
+                    <Layers className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{tag}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("nodes.groupNodeCount", { count: tagNodes.length })}</span>
                   </summary>
                   <div className="mt-2">
                     <NodesGrid

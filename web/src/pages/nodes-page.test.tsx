@@ -563,6 +563,49 @@ describe("NodesPage", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
+  it("最近备份优先按真实备份时刻排序，而非显示文本；无备份置后，同一时刻保持原顺序", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    const baseNode = {
+      host: "node.example.com",
+      address: "10.0.0.9",
+      ip: "10.0.0.9",
+      port: 22,
+      username: "root",
+      authType: "key" as const,
+      keyId: "key-1",
+      tags: ["prod"],
+      status: "online" as const,
+      lastSeenAt: "2026-11-01 02:00:00",
+    };
+    // America/New_York 回拨时 01:30 出现两次：显示文本相同，EST 一次晚一小时；亚毫秒差异同样参与排序。
+    const fallBackText = "2026-11-01 01:30:00";
+    const estSeconds = Date.UTC(2026, 10, 1, 6, 30) / 1000;
+    createContext({
+      nodes: [
+        { ...baseNode, id: 1, name: "node-never", lastBackupAt: "-" },
+        { ...baseNode, id: 2, name: "node-edt-a", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds - 3600, nanoseconds: 0 } },
+        { ...baseNode, id: 3, name: "node-pre-epoch", lastBackupAt: "1969-12-31 23:59:59", lastBackupInstant: { epochSeconds: -1, nanoseconds: 500_000_000 } },
+        { ...baseNode, id: 4, name: "node-est-micro", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds, nanoseconds: 123_456_000 } },
+        { ...baseNode, id: 5, name: "node-edt-b", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds - 3600, nanoseconds: 0 } },
+        { ...baseNode, id: 6, name: "node-est-nano", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds, nanoseconds: 123_456_789 } },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "节点排序方式" }), "backup-recent");
+
+    const order = within(screen.getByRole("table"))
+      .getAllByRole("link", { name: /^node-/ })
+      .map((link) => link.textContent);
+    expect(order).toEqual(["node-est-nano", "node-est-micro", "node-edt-a", "node-edt-b", "node-pre-epoch", "node-never"]);
+  });
+
   it("移动端「更多」菜单可展开导入导出操作", async () => {
     const user = userEvent.setup();
 

@@ -121,8 +121,41 @@ function mapNodeStatus(raw?: string): NodeStatus {
   }
 }
 
+// Go RFC3339 with up to nanosecond precision and an explicit zone; zone-less local times are rejected.
+const RFC3339_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * Exact instant of a server timestamp: whole signed epoch seconds plus nanoseconds, so sub-millisecond
+ * precision and the offset survive. Undefined when absent, zone-less or not a real calendar time.
+ */
+function parseBackupInstant(raw: string | null | undefined): NonNullable<NodeRecord["lastBackupInstant"]> | undefined {
+  if (typeof raw !== "string") return undefined;
+  const match = RFC3339_TIMESTAMP.exec(raw);
+  if (!match) return undefined;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  if (hour > 23 || minute > 59 || second > 59) return undefined;
+  // Read the wall clock as UTC; setUTCFullYear keeps years 0-99 literal. A rolled-over date means an impossible calendar day.
+  const wallClock = new Date(Date.UTC(2000, 0, 1, hour, minute, second));
+  wallClock.setUTCFullYear(year, month - 1, day);
+  if (wallClock.getUTCFullYear() !== year || wallClock.getUTCMonth() !== month - 1 || wallClock.getUTCDate() !== day) {
+    return undefined;
+  }
+  let offsetSeconds = 0;
+  if (match[8]) {
+    const offsetHours = Number(match[9]);
+    const offsetMinutes = Number(match[10]);
+    if (offsetHours > 23 || offsetMinutes > 59) return undefined;
+    offsetSeconds = (match[8] === "-" ? -1 : 1) * (offsetHours * 3600 + offsetMinutes * 60);
+  }
+  return {
+    epochSeconds: wallClock.getTime() / 1000 - offsetSeconds,
+    nanoseconds: Number((match[7] ?? "").padEnd(9, "0")),
+  };
+}
+
 function mapNode(row: NodeResponse): NodeRecord {
   const probeToken = typeof row.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : undefined;
+  const lastBackupInstant = parseBackupInstant(row.last_backup_at);
   return {
     id: row.id,
     name: row.name,
@@ -139,6 +172,7 @@ function mapNode(row: NodeResponse): NodeRecord {
     rawTags: row.tags ?? "",
     lastSeenAt: formatTime(row.last_seen_at),
     lastBackupAt: formatTime(row.last_backup_at),
+    ...(lastBackupInstant ? { lastBackupInstant } : {}),
     connectionLatencyMs: row.connection_latency_ms,
     maintenanceStart: row.maintenance_start ?? undefined,
     maintenanceEnd: row.maintenance_end ?? undefined,

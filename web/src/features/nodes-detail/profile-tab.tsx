@@ -48,7 +48,7 @@ export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabPr
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileUsername")}</dt>
           <dd>{node.username}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileTags")}</dt>
-          <dd>{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
+          <dd className="min-w-0 [overflow-wrap:anywhere]">{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileStatus")}</dt>
           <dd>{node.status}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileBackupDir")}</dt>

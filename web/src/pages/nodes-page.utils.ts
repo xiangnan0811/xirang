@@ -6,9 +6,22 @@ export const nodeStatusPriority: Record<NodeRecord["status"], number> = {
   online: 1,
 };
 
-export function parseDateTime(input: string) {
-  const value = Date.parse(input);
-  return Number.isNaN(value) ? 0 : value;
+/**
+ * Newest backup first by the parsed instant, never the formatted display text. Nodes without a valid
+ * instant sort last; equal keys compare as 0 so the stable sort keeps their incoming order.
+ */
+export function compareLastBackupDesc(
+  first: Pick<NodeRecord, "lastBackupInstant">,
+  second: Pick<NodeRecord, "lastBackupInstant">,
+): number {
+  const firstInstant = first.lastBackupInstant;
+  const secondInstant = second.lastBackupInstant;
+  if (!firstInstant) return secondInstant ? 1 : 0;
+  if (!secondInstant) return -1;
+  return (
+    secondInstant.epochSeconds - firstInstant.epochSeconds ||
+    secondInstant.nanoseconds - firstInstant.nanoseconds
+  );
 }
 
 export type NodesViewProps = {

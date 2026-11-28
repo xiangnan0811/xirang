@@ -164,10 +164,10 @@ export const NodesTable = React.memo(function NodesTable({
                     {node.lastBackupAt}
                   </td>
                   <td className="px-3 py-2.5">
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap items-start gap-1">
                       {node.tags.map((tag) => (
-                        <Badge key={tag} tone="neutral">
-                          {tag}
+                        <Badge key={tag} tone="neutral" className="max-w-48 rounded-md xl:max-w-64">
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{tag}</span>
                         </Badge>
                       ))}
                     </div>
