@@ -144,12 +144,117 @@ describe("NodeEditorDialog", () => {
     expect(nodeId).toBe(10);
     expect(input.name).toBe("prod-node-1-renamed");
     expect(input.tags).toBe(" prod,, web ");
-    expect(input.basePath).toBe("");
+    expect(input.basePath).toBeUndefined();
     expect(input.port).toBe(2222);
     expect(input.backupDir).toBe("prod-node-1");
     expect(input.maintenanceStart).toBeUndefined();
     expect(input.maintenanceEnd).toBeUndefined();
     expect(input.expiryDate).toBeUndefined();
+  });
+
+  const basePathHint = "填写以 / 开头的绝对路径，如 /srv/data。该节点的文件浏览仅限此目录及任务源路径。";
+
+  it.each([
+    { scenario: "a leading space", value: " /srv/app", error: "请去掉首尾的空白字符。" },
+    // NEL 属于 Go 的 Unicode 空白（String#trim 不认）。
+    { scenario: "a trailing NEL", value: "/srv/app\u0085", error: "请去掉首尾的空白字符。" },
+    { scenario: "a relative path", value: "srv/app", error: "请填写以 / 开头的绝对路径。" },
+    { scenario: "a .. segment", value: "/srv/../etc", error: "路径不能包含 .. 路径段。" },
+    { scenario: "a trailing .. segment", value: "/srv/..", error: "路径不能包含 .. 路径段。" },
+    { scenario: "a NUL character", value: "/srv\0app", error: "路径不能包含空字符或无效字符。" },
+  ])("rejects a changed base path with $scenario inline", async ({ value, error }) => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+    const field = screen.getByLabelText("基础路径");
+
+    fireEvent.change(field, { target: { value } });
+    await user.click(submitButton());
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveFocus();
+    expect(field).toHaveAccessibleDescription(`${error} ${basePathHint}`);
+
+    fireEvent.change(field, { target: { value: "/srv/app" } });
+    expect(field).toHaveAttribute("aria-invalid", "false");
+  });
+
+  it("saves a valid base path with dot names, internal spaces and redundant slashes exactly as typed", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+    const value = "/srv/.cache/..hidden/a..b/My Files//./";
+
+    fireEvent.change(screen.getByLabelText("基础路径"), { target: { value } });
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].basePath).toBe(value);
+  });
+
+  it("prefills / but leaves the path unset when it is cleared on create", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor();
+    const field = screen.getByLabelText("基础路径");
+    expect(field).toHaveValue("/");
+
+    await user.type(screen.getByLabelText("节点名称"), "edge-01");
+    await user.type(screen.getByLabelText("主机地址"), "10.0.0.8");
+    await user.selectOptions(screen.getByLabelText("SSH 密钥"), "key-1");
+    fireEvent.change(field, { target: { value: "  " } });
+    await user.click(submitButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(field, { target: { value: "" } });
+    expect(field).toHaveAccessibleDescription(`${basePathHint} 当前仅可浏览任务源路径。填写基础路径可添加授权目录。`);
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].basePath).toBe("");
+  });
+
+  it("omits a cleared base path on edit to keep the stored one", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+    const field = screen.getByLabelText("基础路径");
+
+    expect(field).toHaveAccessibleDescription(basePathHint);
+    await user.clear(field);
+    expect(field).toHaveAccessibleDescription(`${basePathHint} 留空将保留当前基础路径（/srv/app）。`);
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].basePath).toBeUndefined();
+  });
+
+  it("omits a legacy path during unrelated edits so it cannot overwrite a concurrent repair", async () => {
+    const user = userEvent.setup();
+    const legacy = "srv/../legacy ";
+    const { onSave } = renderEditor({ editingNode: makeNode({ basePath: legacy }) });
+    const field = screen.getByLabelText("基础路径");
+
+    expect(field).toHaveValue(legacy);
+    await user.type(screen.getByLabelText("节点名称"), "-renamed");
+    await user.click(submitButton());
+
+    expect(field).toHaveAttribute("aria-invalid", "false");
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].basePath).toBeUndefined();
+  });
+
+  it("explains that a stored whitespace-only base path allows only task source paths", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode({ basePath: " \t" }) });
+    const field = screen.getByLabelText("基础路径");
+    const note = "当前保存的基础路径仅含空白字符，因此仅可浏览任务源路径。填写绝对路径可添加授权目录。";
+
+    expect(field).toHaveAccessibleDescription(`${basePathHint} ${note}`);
+    await user.clear(field);
+    expect(field).toHaveAccessibleDescription(`${basePathHint} ${note}`);
+    fireEvent.change(field, { target: { value: " \t" } });
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].basePath).toBeUndefined();
   });
 
   it("treats a Go-blank backup ID as keeping the stored one, without a migration notice", async () => {

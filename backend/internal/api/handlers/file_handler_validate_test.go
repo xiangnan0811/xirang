@@ -558,7 +558,7 @@ func TestNodeFileBrowserHTTP_InitialDirectorySelection(t *testing.T) {
 	server.fsHost.mu.Lock()
 	server.fsHost.denyList[denied] = true
 	server.fsHost.mu.Unlock()
-	preferredNode := seedFileBrowserTestNode(t, db, server, "initial-preferred", alias)
+	preferredNode := seedFileBrowserTestNode(t, db, server, "initial-preferred", " \t"+alias+"//./ \u00a0")
 	taskNode := seedFileBrowserTestNode(t, db, server, "initial-task", "")
 	fallbackNode := seedFileBrowserTestNode(t, db, server, "initial-fallback", missing)
 	emptyNode := seedFileBrowserTestNode(t, db, server, "initial-empty", empty)
@@ -928,7 +928,20 @@ func TestNodeFileBrowserHTTP_InRootPathsAndSafeSymlinksAllowed(t *testing.T) {
 	router := newFileBrowserTestRouter(db)
 	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
 
-	node := seedFileBrowserTestNode(t, db, server, "node-in-root", root)
+	node := seedFileBrowserTestNode(t, db, server, "node-in-root", root+"//./")
+	legacyNode := seedFileBrowserTestNode(t, db, server, "node-legacy-root", " \t"+root+"//./ \u00a0")
+	for _, candidate := range []model.Node{node, legacyNode} {
+		initial := performNodeFileBrowserRequest(t, router, admin, "files?initial=1", candidate.ID, "<omit>")
+		var listing fileListEnvelope
+		if initial.Code != http.StatusOK || json.Unmarshal(initial.Body.Bytes(), &listing) != nil || listing.Data.Path != root {
+			t.Fatalf("initial base %q: status=%d body=%s", candidate.BasePath, initial.Code, initial.Body.String())
+		}
+		preview := performNodeFileBrowserRequest(t, router, admin, "files/content", candidate.ID, filepath.Join(root, "file"))
+		var content fileContentEnvelope
+		if preview.Code != http.StatusOK || json.Unmarshal(preview.Body.Bytes(), &content) != nil || content.Data.Content != "hi" || content.Data.Path != filepath.Join(root, "file") {
+			t.Fatalf("preview base %q: status=%d body=%s", candidate.BasePath, preview.Code, preview.Body.String())
+		}
+	}
 
 	// 1) 列举根内子目录 sub
 	subResp := performNodeFileBrowserRequest(t, router, admin, "files", node.ID, filepath.Join(root, "sub"))

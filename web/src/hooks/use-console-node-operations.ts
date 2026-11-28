@@ -326,7 +326,7 @@ export function useNodeOperations({
                 username: input.username,
                 authType: input.authType,
                 keyId,
-                basePath: input.basePath || "/",
+                basePath: input.basePath || node.basePath,
                 tags: parseTags(input.tags),
                 rawTags: input.tags,
               }

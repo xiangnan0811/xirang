@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/repository"
 	"xirang/backend/internal/secure"
 
 	"gorm.io/driver/sqlite"
@@ -44,7 +45,7 @@ func TestNodeUpdatePreservesConcurrentHealthAndDoesNotResurrect(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale.Host = "new-host"
-	if err := repo.Update(ctx, stale, false, nil); err != nil {
+	if err := repo.Update(ctx, stale, repository.NodeUpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := repo.FindByID(ctx, original.ID)
@@ -62,7 +63,7 @@ func TestNodeUpdatePreservesConcurrentHealthAndDoesNotResurrect(t *testing.T) {
 		t.Fatal("update failed to encrypt password")
 	}
 	updated.Status = "maintenance"
-	if err := repo.Update(ctx, updated, true, nil); err != nil {
+	if err := repo.Update(ctx, updated, repository.NodeUpdateOptions{UpdateStatus: true}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err = repo.FindByID(ctx, original.ID)
@@ -72,7 +73,7 @@ func TestNodeUpdatePreservesConcurrentHealthAndDoesNotResurrect(t *testing.T) {
 	if err := db.Delete(&model.Node{}, original.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Update(ctx, updated, false, nil); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := repo.Update(ctx, updated, repository.NodeUpdateOptions{}); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("deleted update returned %v", err)
 	}
 	var count int64
@@ -109,15 +110,15 @@ func TestNodeUpdateWritesOnlyChangedTimes(t *testing.T) {
 	}
 	node.ExpiryDate = nil // The caller's copy is stale.
 	node.Host = "updated"
-	if err := repo.Update(ctx, node, false, nil); err != nil {
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Update(ctx, node, false, func(current *model.Node) error {
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 		if current.ExpiryDate == nil || !current.ExpiryDate.Equal(expiry) {
 			t.Fatalf("callback did not receive stored expiry: %#v", current.ExpiryDate)
 		}
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("DROP TRIGGER reject_time_write").Error; err != nil {
@@ -125,24 +126,73 @@ func TestNodeUpdateWritesOnlyChangedTimes(t *testing.T) {
 	}
 	rejected := errors.New("rejected patch")
 	node.Host = "must-not-save"
-	if err := repo.Update(ctx, node, false, func(current *model.Node) error {
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 		current.ExpiryDate = nil
 		return rejected
-	}); !errors.Is(err, rejected) {
+	}}); !errors.Is(err, rejected) {
 		t.Fatalf("callback rejection returned %v", err)
 	}
 	stored, err := repo.FindByID(ctx, node.ID)
 	if err != nil || stored.Host != "updated" || stored.ExpiryDate == nil || !stored.ExpiryDate.Equal(expiry) {
 		t.Fatalf("callback rejection changed stored node: %#v, %v", stored, err)
 	}
-	if err := repo.Update(ctx, node, false, func(current *model.Node) error {
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 		current.ExpiryDate = nil
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	stored, err = repo.FindByID(ctx, node.ID)
 	if err != nil || stored.ExpiryDate != nil {
 		t.Fatalf("expiry was not cleared: %#v, %v", stored, err)
+	}
+}
+
+func TestNodeUpdateWritesBasePathOnlyWhenRequested(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db, err := gorm.Open(sqlite.Open("file:node_update_base_path?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repo := NewNodeRepository(db)
+	node := &model.Node{Name: "path", Host: "old", Username: "root", BackupDir: "path", AuthType: "password", Password: "secret", BasePath: "legacy"}
+	if err := repo.Create(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Node{}).Where("id = ?", node.ID).Update("base_path", "/repaired").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER reject_base_path_write BEFORE UPDATE OF base_path ON nodes BEGIN SELECT RAISE(ABORT, 'unexpected base path write'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	node.Host = "new"
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.FindByID(ctx, node.ID)
+	if err != nil || stored.Host != "new" || stored.BasePath != "/repaired" {
+		t.Fatalf("stale update restored path: %#v, %v", stored, err)
+	}
+	if err := db.Exec("DROP TRIGGER reject_base_path_write").Error; err != nil {
+		t.Fatal(err)
+	}
+	node.BasePath = "/new//path/"
+	if err := repo.Update(ctx, node, repository.NodeUpdateOptions{UpdateBasePath: true}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = repo.FindByID(ctx, node.ID)
+	if err != nil || stored.BasePath != node.BasePath {
+		t.Fatalf("explicit path update failed: %#v, %v", stored, err)
 	}
 }

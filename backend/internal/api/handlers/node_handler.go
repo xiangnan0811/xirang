@@ -46,16 +46,17 @@ func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHa
 }
 
 type nodeRequest struct {
-	Name             string  `json:"name" binding:"required"`
-	Host             string  `json:"host" binding:"required"`
-	Port             int     `json:"port"`
-	Username         string  `json:"username" binding:"required"`
-	AuthType         string  `json:"auth_type"`
-	Password         string  `json:"password"`
-	PrivateKey       string  `json:"private_key"`
-	SSHKeyID         *uint   `json:"ssh_key_id"`
-	Tags             string  `json:"tags"`
-	BasePath         string  `json:"base_path"`
+	Name       string `json:"name" binding:"required"`
+	Host       string `json:"host" binding:"required"`
+	Port       int    `json:"port"`
+	Username   string `json:"username" binding:"required"`
+	AuthType   string `json:"auth_type"`
+	Password   string `json:"password"`
+	PrivateKey string `json:"private_key"`
+	SSHKeyID   *uint  `json:"ssh_key_id"`
+	Tags       string `json:"tags"`
+	// BasePath is empty or an absolute POSIX path with no NUL, complete .. component, or leading/trailing Unicode whitespace. Create accepts empty as unset; update retains the existing value when omitted, null, empty, or repeated unchanged.
+	BasePath         string  `json:"base_path" extensions:"x-nullable"`
 	BackupDir        string  `json:"backup_dir"`
 	MaintenanceStart *string `json:"maintenance_start" extensions:"x-nullable"`
 	MaintenanceEnd   *string `json:"maintenance_end" extensions:"x-nullable"`

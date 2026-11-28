@@ -134,6 +134,18 @@ func TestGeneratedSwaggerPublishesNodeStatusWrites(t *testing.T) {
 	}
 }
 
+func TestGeneratedSwaggerPublishesNodeBasePathWrites(t *testing.T) {
+	var document generatedSwaggerContractDocument
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatalf("decode generated Swagger: %v", err)
+	}
+	schema := document.Definitions["internal_api_handlers.nodeRequest"]
+	field, ok := schema.Properties["base_path"]
+	if !ok || field.Type != "string" || !field.Nullable || slices.Contains(schema.Required, "base_path") {
+		t.Fatalf("base_path must be an optional nullable string: %+v", field)
+	}
+}
+
 func TestGeneratedSwaggerPublishesOverviewResponseCoverage(t *testing.T) {
 	var document generatedSwaggerContractDocument
 	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {

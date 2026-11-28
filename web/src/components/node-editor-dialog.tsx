@@ -47,6 +47,7 @@ type FieldKey =
   | "keyId"
   | "password"
   | "inlinePrivateKey"
+  | "basePath"
   | "backupDir"
   | "maintenanceStart"
   | "maintenanceEnd";
@@ -130,9 +131,20 @@ function hasReservedPathChars(value: string): boolean {
 }
 
 // 与服务端 strings.TrimSpace 的判定一致（Unicode White_Space：含 NEL、不含 BOM，不同于 String#trim）。
-// 空白即“未填写”：新建按节点名称生成，编辑保留原标识；非空值原样保存。
-function isBlankBackupDir(value: string): boolean {
+// 备份目录标识：空白即“未填写”，新建按节点名称生成、编辑保留原标识；基础路径：仅含空白的旧值运行时等同未设置。
+function isGoBlank(value: string): boolean {
   return /^\p{White_Space}*$/u.test(value);
+}
+
+// 与服务端 node.ValidateBasePath 一致：非空值须为以 / 开头的 POSIX 绝对路径，首尾无 Go 空白，
+// 不含空字符、孤立代理项（无法编码为合法 UTF-8）或完整的 .. 路径段；其余写法（/、. 前缀、内部空格、
+// 重复斜杠、末尾斜杠）按原样保存。空串不在此校验：新建使用默认 /，编辑保留原值。
+function basePathErrorKey(value: string): string | null {
+  if (value.includes("\0") || /[\uD800-\uDFFF]/u.test(value)) return "nodeEditor.validation.basePathInvalidChars";
+  if (/^\p{White_Space}|\p{White_Space}$/u.test(value)) return "nodeEditor.validation.basePathEdgeWhitespace";
+  if (!value.startsWith("/")) return "nodeEditor.validation.basePathNotAbsolute";
+  if (value.split("/").includes("..")) return "nodeEditor.validation.basePathParentSegment";
+  return null;
 }
 
 function parsePort(raw: string): number | null {
@@ -236,8 +248,14 @@ function validateDraft({ draft, baseline, editingNode }: EditorContext, t: TFunc
     }
   }
 
+  // 编辑时与存储原值完全相同即原样回传（服务端保留且不复验），历史值不阻塞无关修改。
+  if (draft.basePath !== "" && changed("basePath")) {
+    const basePathError = basePathErrorKey(draft.basePath);
+    if (basePathError) errors.basePath = t(basePathError);
+  }
+
   // 非空值按原样存储，校验也针对原值（与服务端一致按字节计长度）。
-  if (!isBlankBackupDir(draft.backupDir)) {
+  if (!isGoBlank(draft.backupDir)) {
     if (
       changed("backupDir") &&
       (new TextEncoder().encode(draft.backupDir).length > 128 || hasReservedPathChars(draft.backupDir))
@@ -297,8 +315,9 @@ function buildNodeInput({ draft, baseline, editingNode }: EditorContext): NewNod
       draft.authType === "key" && !useInlineKey ? draft.keyId || null : null,
     password: draft.authType === "password" ? draft.password : undefined,
     tags: draft.tags,
-    // 编辑时原样发送（含空值；服务端空值即保留原值）；新建沿用默认根路径。
-    basePath: isEditing ? draft.basePath : draft.basePath || "/",
+    basePath: isEditing && (draft.basePath === "" || draft.basePath === baseline.basePath)
+      ? undefined
+      : draft.basePath,
     backupDir: draft.backupDir,
     useSudo: draft.useSudo,
     inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
@@ -325,6 +344,7 @@ const FIELD_IDS: Record<FieldKey, string> = {
   keyId: "node-edit-ssh-key",
   password: "node-edit-password",
   inlinePrivateKey: "node-edit-inline-private-key",
+  basePath: "node-edit-base-path",
   backupDir: "node-edit-backup-dir",
   maintenanceStart: "node-edit-maint-start",
   maintenanceEnd: "node-edit-maint-end",
@@ -454,18 +474,24 @@ export function NodeEditorDialog({
   const timeZoneName = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const timeZoneLabel = timeZoneName ? `${timeZoneName}, ${formatUtcOffset()}` : formatUtcOffset();
 
-  const basePathNote = !isEditing
-    ? null
-    : draft.basePath === "" && baseline.basePath === ""
+  // 空值或未改动的原值都沿用存储值；运行时按 Go TrimSpace 判定，仅含空白的旧值等同未设置根目录。
+  const basePathKeepsStored = isEditing && (draft.basePath === "" || draft.basePath === baseline.basePath);
+  const basePathNote = basePathKeepsStored
+    ? baseline.basePath === ""
       ? t("nodeEditor.basePathBlankCurrent")
-      : draft.basePath === "" && baseline.basePath !== ""
-        ? t("nodeEditor.basePathBlankKeeps", { path: baseline.basePath })
-        : null;
+      : isGoBlank(baseline.basePath)
+        ? t("nodeEditor.basePathWhitespaceLegacy")
+        : draft.basePath === ""
+          ? t("nodeEditor.basePathBlankKeeps", { path: baseline.basePath })
+          : null
+    : !isEditing && draft.basePath === ""
+      ? t("nodeEditor.basePathBlankCurrent")
+      : null;
 
   // 空白输入会保留原标识，只有明确填写不同的值才提示。
   const backupDirChanged =
     isEditing &&
-    !isBlankBackupDir(draft.backupDir) &&
+    !isGoBlank(draft.backupDir) &&
     draft.backupDir !== baseline.backupDir;
   // eslint-disable-next-line no-control-regex -- intentional: detect non-ASCII chars in node name
   const showBackupDirNonAsciiWarning = !isEditing && !backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name);
@@ -801,9 +827,15 @@ export function NodeEditorDialog({
           <label htmlFor="node-edit-base-path" className={labelClass}>{t('nodeEditor.basePath')}</label>
           <Input id="node-edit-base-path" placeholder="/"
             value={draft.basePath}
-            aria-describedby={describedBy("node-edit-base-path-hint", basePathNote && "node-edit-base-path-note")}
-            onChange={(event) => updateDraft({ basePath: event.target.value })}
+            aria-invalid={Boolean(fieldErrors.basePath)}
+            aria-describedby={describedBy(
+              fieldErrors.basePath && "node-edit-base-path-error",
+              "node-edit-base-path-hint",
+              basePathNote && "node-edit-base-path-note",
+            )}
+            onChange={(event) => updateDraft({ basePath: event.target.value }, "basePath")}
           />
+          <FieldError id="node-edit-base-path-error" message={fieldErrors.basePath} />
           <p id="node-edit-base-path-hint" className={hintClass}>{t('nodeEditor.basePathHint')}</p>
           {basePathNote ? (
             <p id="node-edit-base-path-note" className={warningClass}>{basePathNote}</p>

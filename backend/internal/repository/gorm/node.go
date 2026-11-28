@@ -117,15 +117,18 @@ func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node,
 }
 
 // Update writes configuration fields without overwriting probe or backup results.
-func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error {
-	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BasePath", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
-	if updateStatus {
+func (r *NodeRepository) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
+	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
+	if options.UpdateStatus {
 		fields = append(fields, "Status")
 	}
+	if options.UpdateBasePath {
+		fields = append(fields, "BasePath")
+	}
 	write := func(tx *gorm.DB, existing *model.Node) error {
-		if applyTimes != nil {
+		if options.ApplyTimes != nil {
 			start, end, expiry := captureNodeTime(existing.MaintenanceStart), captureNodeTime(existing.MaintenanceEnd), captureNodeTime(existing.ExpiryDate)
-			if err := applyTimes(existing); err != nil {
+			if err := options.ApplyTimes(existing); err != nil {
 				return err
 			}
 			if start.changed(existing.MaintenanceStart) {
@@ -150,8 +153,8 @@ func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateSta
 		}
 		return nil
 	}
-	if applyTimes != nil || (node.SSHKeyID != nil && *node.SSHKeyID > 0) {
-		return r.withPinnedSSHKey(ctx, node, true, applyTimes != nil, write)
+	if options.ApplyTimes != nil || (node.SSHKeyID != nil && *node.SSHKeyID > 0) {
+		return r.withPinnedSSHKey(ctx, node, true, options.ApplyTimes != nil, write)
 	}
 	return apperr.WrapDBError(write(r.db.WithContext(ctx), nil))
 }

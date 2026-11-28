@@ -81,6 +81,9 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, validationError(err.Error())
 	}
+	if err := ValidateBasePath(input.BasePath); err != nil {
+		return nil, validationError(err.Error())
+	}
 
 	// Handle backup dir: auto-generate from name if empty
 	backupDir := input.BackupDir
@@ -163,6 +166,7 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 
 	oldBackupDir := node.BackupDir
 	updateStatus := input.Status != ""
+	updateBasePath := input.BasePath != "" && input.BasePath != node.BasePath
 
 	// Merge defaults from existing node for unspecified fields
 	if input.Port == 0 {
@@ -204,6 +208,11 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, "", validationError(err.Error())
 	}
+	if updateBasePath {
+		if err := ValidateBasePath(input.BasePath); err != nil {
+			return nil, "", validationError(err.Error())
+		}
+	}
 	applyTimes, err := optionalTimePatch(input)
 	if err != nil {
 		return nil, "", err
@@ -237,7 +246,7 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 
 	applyOptionalFields(node, input)
 
-	if err := s.repo.Update(ctx, node, updateStatus, applyTimes); err != nil {
+	if err := s.repo.Update(ctx, node, repository.NodeUpdateOptions{UpdateStatus: updateStatus, UpdateBasePath: updateBasePath, ApplyTimes: applyTimes}); err != nil {
 		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
 			return nil, "", validationError("所选密钥不存在，请重新选择")
 		}

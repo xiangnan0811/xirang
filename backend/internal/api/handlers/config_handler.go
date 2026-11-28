@@ -662,7 +662,7 @@ type importValidationError struct {
 	Message  string `json:"message"`
 }
 
-// validateNodeImportData 校验导入的节点数据：host 有效且无可疑地址，base_path 为绝对路径。
+// validateNodeImportData 校验导入的节点 host 和显式 base_path。
 func validateNodeImportData(nodeData map[string]interface{}, idx int) []importValidationError {
 	var errs []importValidationError
 	name, _ := nodeData["name"].(string)
@@ -682,8 +682,15 @@ func validateNodeImportData(nodeData map[string]interface{}, idx int) []importVa
 		})
 	}
 
-	if basePath, ok := nodeData["base_path"].(string); ok && basePath != "" {
-		if err := validateImportPath(basePath); err != nil {
+	if value, present := nodeData["base_path"]; present && value != nil {
+		basePath, ok := value.(string)
+		var err error
+		if !ok {
+			err = errors.New("base_path 必须是字符串或 null")
+		} else {
+			err = node.ValidateBasePath(basePath)
+		}
+		if err != nil {
 			errs = append(errs, importValidationError{
 				Resource: "nodes",
 				Index:    idx,

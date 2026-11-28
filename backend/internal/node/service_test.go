@@ -23,13 +23,13 @@ type probeDuringNodeUpdate struct {
 	seen time.Time
 }
 
-func (r *probeDuringNodeUpdate) Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error {
+func (r *probeDuringNodeUpdate) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
 	if err := r.db.WithContext(ctx).Model(&model.Node{}).Where("id = ?", node.ID).Updates(map[string]any{
 		"status": "online", "connection_latency": 42, "last_seen_at": r.seen,
 	}).Error; err != nil {
 		return err
 	}
-	return r.NodeRepository.Update(ctx, node, updateStatus, applyTimes)
+	return r.NodeRepository.Update(ctx, node, options)
 }
 
 func TestNodeUpdatePreservesProbeAndOmittedDefaults(t *testing.T) {
@@ -79,7 +79,7 @@ type interveningTimeUpdate struct {
 	db *gorm.DB
 }
 
-func (r *interveningTimeUpdate) Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error {
+func (r *interveningTimeUpdate) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
 	start := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
 	if err := r.db.WithContext(ctx).Model(&model.Node{}).Where("id = ?", node.ID).Updates(map[string]any{
@@ -87,7 +87,7 @@ func (r *interveningTimeUpdate) Update(ctx context.Context, node *model.Node, up
 	}).Error; err != nil {
 		return err
 	}
-	return r.NodeRepository.Update(ctx, node, updateStatus, applyTimes)
+	return r.NodeRepository.Update(ctx, node, options)
 }
 
 func TestNodeOptionalTimesMergeAndValidation(t *testing.T) {
@@ -191,6 +191,75 @@ func TestNodeOptionalTimesLegacyRepairAndYearBoundary(t *testing.T) {
 		input.ExpiryDate = &boundary
 		if _, _, err := service.Update(ctx, node.ID, input); !errors.Is(err, apperr.ErrValidation) || !strings.Contains(err.Error(), "expiry_date") {
 			t.Fatalf("out-of-range UTC year returned %v", err)
+		}
+	}
+}
+
+type repairBasePathDuringUpdate struct {
+	repository.NodeRepository
+	db *gorm.DB
+}
+
+func (r *repairBasePathDuringUpdate) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
+	if err := r.db.WithContext(ctx).Model(&model.Node{}).Where("id = ?", node.ID).Update("base_path", "/repaired").Error; err != nil {
+		return err
+	}
+	return r.NodeRepository.Update(ctx, node, options)
+}
+
+func TestNodeBasePathValidationAndLegacyRetention(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db, err := gorm.Open(sqlite.Open("file:node_base_path_service?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repo := gormrepo.NewNodeRepository(db)
+	service := NewNodeService(repo)
+	input := CreateNodeInput{Name: "path-node", Host: "node.example", Username: "root", AuthType: "password", Password: "secret", BasePath: "/a//./b/"}
+	created, err := service.Create(ctx, input)
+	if err != nil || created.BasePath != input.BasePath {
+		t.Fatalf("create did not preserve path: %#v, %v", created, err)
+	}
+	input.BasePath = "/a/../invalid"
+	if _, err := service.Create(ctx, input); !errors.Is(err, apperr.ErrValidation) || strings.Contains(err.Error(), input.BasePath) {
+		t.Fatalf("invalid create returned %v", err)
+	}
+	if _, _, err := service.Update(ctx, created.ID, input); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("invalid update returned %v", err)
+	}
+	input.BasePath = "/fixed//path/"
+	updated, _, err := service.Update(ctx, created.ID, input)
+	if err != nil || updated.BasePath != input.BasePath {
+		t.Fatalf("valid update did not preserve path: %#v, %v", updated, err)
+	}
+	legacy := " relative/legacy "
+	for _, echoed := range []bool{false, true} {
+		if err := db.Model(&model.Node{}).Where("id = ?", created.ID).Update("base_path", legacy).Error; err != nil {
+			t.Fatal(err)
+		}
+		input.BasePath = ""
+		if echoed {
+			input.BasePath = legacy
+		}
+		updated, _, err = service.Update(ctx, created.ID, input)
+		if err != nil || updated.BasePath != legacy {
+			t.Fatalf("legacy path retention (echo=%v): %#v, %v", echoed, updated, err)
+		}
+		concurrent := NewNodeService(&repairBasePathDuringUpdate{NodeRepository: repo, db: db})
+		updated, _, err = concurrent.Update(ctx, created.ID, input)
+		if err != nil || updated.BasePath != "/repaired" {
+			t.Fatalf("concurrent path repair (echo=%v): %#v, %v", echoed, updated, err)
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"xirang/backend/internal/fileaccess"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	nodePkg "xirang/backend/internal/node"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 
@@ -220,7 +221,7 @@ func (h *FileHandler) listInitialNodeFiles(c *gin.Context, ctx context.Context, 
 	}
 
 	firstTask := 0
-	if strings.TrimSpace(node.BasePath) != "" && len(roots) > 0 {
+	if nodePkg.FileBrowserBasePath(node.BasePath) != "" && len(roots) > 0 {
 		firstTask = 1
 	}
 	sort.Slice(roots[firstTask:], func(i, j int) bool {
@@ -583,9 +584,11 @@ func loadNodeFileRoots(ctx context.Context, db *gorm.DB, node model.Node) ([]fil
 	if db == nil {
 		return nil, fmt.Errorf("%w: database unavailable", errFileRootQuery)
 	}
-	values := make([]string, 0, 4)
-	if base := strings.TrimSpace(node.BasePath); base != "" {
-		values = append(values, base)
+	roots := make([]fileaccess.Root, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	if base := nodePkg.FileBrowserBasePath(node.BasePath); base != "" {
+		roots = append(roots, fileaccess.Root{Path: base})
+		seen[base] = struct{}{}
 	}
 	var tasks []model.Task
 	if err := db.WithContext(ctx).Select("rsync_source").Where("node_id = ?", node.ID).Find(&tasks).Error; err != nil {
@@ -593,18 +596,13 @@ func loadNodeFileRoots(ctx context.Context, db *gorm.DB, node model.Node) ([]fil
 	}
 	for _, taskEntity := range tasks {
 		if source := strings.TrimSpace(taskEntity.RsyncSource); source != "" {
-			values = append(values, source)
+			clean := filepath.Clean(source)
+			if _, exists := seen[clean]; exists {
+				continue
+			}
+			seen[clean] = struct{}{}
+			roots = append(roots, fileaccess.Root{Path: clean})
 		}
-	}
-	seen := make(map[string]struct{}, len(values))
-	roots := make([]fileaccess.Root, 0, len(values))
-	for _, value := range values {
-		clean := filepath.Clean(value)
-		if _, exists := seen[clean]; exists {
-			continue
-		}
-		seen[clean] = struct{}{}
-		roots = append(roots, fileaccess.Root{Path: clean})
 	}
 	return roots, nil
 }

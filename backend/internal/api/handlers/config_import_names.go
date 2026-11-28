@@ -759,7 +759,7 @@ func applyImportedNodeFields(target *model.Node, data map[string]interface{}) {
 		target.Tags = tags
 	}
 	if basePath, ok := data["base_path"].(string); ok {
-		target.BasePath = strings.TrimSpace(basePath)
+		target.BasePath = basePath
 	}
 }
 

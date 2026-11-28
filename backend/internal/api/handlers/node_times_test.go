@@ -39,7 +39,7 @@ type pauseNodeTimeUpdate struct {
 	release chan struct{}
 }
 
-func (r *pauseNodeTimeUpdate) Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error {
+func (r *pauseNodeTimeUpdate) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
 	if r.claimed.CompareAndSwap(false, true) {
 		close(r.entered)
 		select {
@@ -48,7 +48,7 @@ func (r *pauseNodeTimeUpdate) Update(ctx context.Context, node *model.Node, upda
 			return ctx.Err()
 		}
 	}
-	return r.NodeRepository.Update(ctx, node, updateStatus, applyTimes)
+	return r.NodeRepository.Update(ctx, node, options)
 }
 
 func TestNodeTimestampWritesSQLitePostgres(t *testing.T) {

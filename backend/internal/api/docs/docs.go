@@ -20597,7 +20597,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "base_path": {
-                    "type": "string"
+                    "description": "BasePath is empty or an absolute POSIX path with no NUL, complete .. component, or leading/trailing Unicode whitespace. Create accepts empty as unset; update retains the existing value when omitted, null, empty, or repeated unchanged.",
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "expiry_date": {
                     "type": "string",

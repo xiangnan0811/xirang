@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/repository"
 	gormrepo "xirang/backend/internal/repository/gorm"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -92,7 +93,7 @@ func TestNodeTimestampMergeLocksSQLitePostgres(t *testing.T) {
 				releaseHolder := func() { releaseOnce.Do(func() { close(release) }) }
 				holderFinished := false
 				go func() {
-					err := gormrepo.NewNodeRepository(db).Update(ctx, &holderNode, false, func(current *model.Node) error {
+					err := gormrepo.NewNodeRepository(db).Update(ctx, &holderNode, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 						entered <- *current
 						select {
 						case <-release:
@@ -101,7 +102,7 @@ func TestNodeTimestampMergeLocksSQLitePostgres(t *testing.T) {
 						case <-ctx.Done():
 							return ctx.Err()
 						}
-					})
+					}})
 					holderDone <- err
 				}()
 				defer func() {
@@ -135,11 +136,11 @@ func TestNodeTimestampMergeLocksSQLitePostgres(t *testing.T) {
 
 				var callbackReached atomic.Bool
 				contenderRepo := gormrepo.NewNodeRepository(contenderDB)
-				err := contenderRepo.Update(ctx, &contenderNode, false, func(current *model.Node) error {
+				err := contenderRepo.Update(ctx, &contenderNode, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 					callbackReached.Store(true)
 					current.MaintenanceEnd = &updatedEnd
 					return nil
-				})
+				}})
 				if callbackReached.Load() {
 					t.Fatal("contender reached its merge callback while the holder retained the lock")
 				}
@@ -168,12 +169,12 @@ func TestNodeTimestampMergeLocksSQLitePostgres(t *testing.T) {
 
 				var retryCurrent model.Node
 				retryCalled := false
-				err = contenderRepo.Update(ctx, &contenderNode, false, func(current *model.Node) error {
+				err = contenderRepo.Update(ctx, &contenderNode, repository.NodeUpdateOptions{ApplyTimes: func(current *model.Node) error {
 					retryCalled = true
 					retryCurrent = *current
 					current.MaintenanceEnd = &updatedEnd
 					return nil
-				})
+				}})
 				if err != nil {
 					t.Fatalf("retry contender update: %v", err)
 				}
