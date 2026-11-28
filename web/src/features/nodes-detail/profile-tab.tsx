@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
-import type { NodeDetailTabProps } from "./types";
+
+type ProfileTabProps = {
+  /** Exact-id record from the page-level `useNodeRecord`; archived nodes included. */
+  node: NodeRecord | null;
+  isLoading: boolean;
+  /** Record request failed for a reason other than 404. */
+  loadFailed: boolean;
+};
 
 function formatRecordedTime(value: string): string {
   if (!value || value === "-") {
@@ -12,58 +17,20 @@ function formatRecordedTime(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
+export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabProps) {
   const { t } = useTranslation();
-  const [node, setNode] = useState<NodeRecord | null>(null);
-  // Start loading when we expect a fetch so stale content cannot paint first frame.
-  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
-  const [error, setError] = useState(false);
-  // nodeId that `node` was loaded for — ignore mismatched stale state.
-  const [loadedForId, setLoadedForId] = useState<number | null>(null);
-  const [scope, setScope] = useState({ nodeId, token });
-  if (scope.nodeId !== nodeId || scope.token !== token) {
-    setScope({ nodeId, token });
-    setNode(null);
-    setLoadedForId(null);
-    setError(false);
-    setLoading(Boolean(token && nodeId > 0));
-  }
 
-  const fetchNode = useCallback((signal: AbortSignal) => {
-    if (!token || nodeId <= 0) return;
-    return apiClient.getNodes(token, { signal }).then((rows) => {
-      if (!signal.aborted) {
-        setNode(rows.find((n) => n.id === nodeId) ?? null);
-        setLoadedForId(nodeId);
-      }
-    }).catch(() => {
-      if (!signal.aborted) {
-        setNode(null);
-        setLoadedForId(nodeId);
-        setError(true);
-      }
-    }).finally(() => {
-      if (!signal.aborted) setLoading(false);
-    });
-  }, [nodeId, token]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchNode(controller.signal);
-    return () => controller.abort();
-  }, [fetchNode, nodeId, token]);
-
-  if (loading || (token && nodeId > 0 && loadedForId !== nodeId && !error)) {
+  if (isLoading) {
     return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.loading")}</p>;
   }
-  if (error) {
+  if (loadFailed) {
     return (
       <p className="text-sm text-destructive" role="alert">
         {t("nodes.nodeDetail.profileError")}
       </p>
     );
   }
-  if (node == null || node.id !== nodeId || loadedForId !== nodeId) {
+  if (node == null) {
     return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.profileNotFound")}</p>;
   }
 
@@ -97,9 +64,7 @@ export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLatency")}</dt>
           <dd>{node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-"}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
-          <dd>
-            {node.lastBackupAt ? new Date(node.lastBackupAt).toLocaleString() : "-"}
-          </dd>
+          <dd>{formatRecordedTime(node.lastBackupAt)}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileMaintWindow")}</dt>
           <dd>
             {node.maintenanceStart || node.maintenanceEnd

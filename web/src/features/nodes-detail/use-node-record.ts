@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
 import type { NodeDetailAuthToken } from "./types";
@@ -9,45 +9,45 @@ interface UseNodeRecordResult {
   error: unknown;
 }
 
-export function useNodeRecord(nodeId: number, token: NodeDetailAuthToken): UseNodeRecordResult {
-  const [data, setData] = useState<NodeRecord | null>(null);
-  const [isLoading, setIsLoading] = useState(() => Boolean(token && nodeId > 0));
-  const [error, setError] = useState<unknown>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const [scope, setScope] = useState({ nodeId, token });
-  if (scope.nodeId !== nodeId || scope.token !== token) {
-    setScope({ nodeId, token });
-    setData(null);
-    setError(null);
-    setIsLoading(Boolean(token && nodeId > 0));
-  }
+/** Identity of one navigation; recreated on every input change, so A→B→A yields a fresh scope. */
+interface NodeRecordScope {
+  nodeId: number;
+  token: NodeDetailAuthToken;
+}
 
-  const fetchNode = useCallback(() => {
-    if (!token || nodeId <= 0) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    return apiClient.getNode(token, nodeId, { signal: controller.signal }).then((result) => {
-      if (!controller.signal.aborted) {
-        setData(result);
-        setError(null);
-      }
-    }).catch((err: unknown) => {
-      if (!controller.signal.aborted) {
-        setData(null);
-        setError(err);
-      }
-    }).finally(() => {
-      if (!controller.signal.aborted) setIsLoading(false);
-    });
-  }, [token, nodeId]);
+interface NodeRecordState extends UseNodeRecordResult {
+  scope: NodeRecordScope;
+}
+
+function initialState(nodeId: number, token: NodeDetailAuthToken): NodeRecordState {
+  return { scope: { nodeId, token }, data: null, isLoading: Boolean(token && nodeId > 0), error: null };
+}
+
+export function useNodeRecord(nodeId: number, token: NodeDetailAuthToken): UseNodeRecordResult {
+  const [state, setState] = useState(() => initialState(nodeId, token));
+  if (state.scope.nodeId !== nodeId || state.scope.token !== token) {
+    setState(initialState(nodeId, token));
+  }
+  const { scope } = state;
 
   useEffect(() => {
-    void fetchNode();
-    return () => {
-      abortRef.current?.abort();
+    if (!scope.token || scope.nodeId <= 0) return;
+    const controller = new AbortController();
+    // A response settles only the scope that issued it, once. Checking scope identity in the
+    // updater also rejects a response that lands after a newer scope committed but before this
+    // cleanup aborted its signal.
+    const settle = (data: NodeRecord | null, error: unknown) => {
+      if (controller.signal.aborted) return;
+      setState((prev) => (prev.scope === scope && prev.isLoading ? { scope, data, isLoading: false, error } : prev));
     };
-  }, [fetchNode]);
+    apiClient.getNode(scope.token, scope.nodeId, { signal: controller.signal }).then(
+      (result) => settle(result, null),
+      (err: unknown) => settle(null, err),
+    );
+    return () => {
+      controller.abort();
+    };
+  }, [scope]);
 
-  return { data, isLoading, error };
+  return { data: state.data, isLoading: state.isLoading, error: state.error };
 }

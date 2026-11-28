@@ -9,6 +9,7 @@ import AnomalyTab from "@/features/nodes-detail/anomaly-tab";
 import { useNodeRecord } from "@/features/nodes-detail/use-node-record";
 import { useNodeSummary } from "@/features/nodes-detail/use-node-summary";
 import { useAuth } from "@/context/auth-context.hooks";
+import { ApiError } from "@/lib/api/core";
 import { PageHero } from "@/components/ui/page-hero";
 
 const TAB_IDS = ["overview", "tasks", "alerts", "profile", "anomaly"] as const;
@@ -37,6 +38,8 @@ export function NodesDetailPage() {
   const activeTab: TabId = isTabId(tabParam) ? tabParam : "overview";
   const { data: node, isLoading: nodeLoading, error: nodeError } = useNodeRecord(nodeId, token);
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useNodeSummary(nodeId, token);
+  const nodeNotFound = nodeError instanceof ApiError && (nodeError.status === 404 || nodeError.httpStatus === 404);
+  const nodeLoadFailed = nodeError != null && !nodeNotFound;
 
   const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params);
@@ -88,10 +91,13 @@ export function NodesDetailPage() {
         title={title}
         subtitle={subtitle}
         meta={
-          nodeError ? (
+          // The profile panel renders this same record state; avoid a second copy in the hero.
+          activeTab === "profile" ? null : nodeLoadFailed ? (
             <span className="text-destructive" role="alert">
               {t("nodes.nodeDetail.profileError")}
             </span>
+          ) : nodeNotFound ? (
+            <span className="text-muted-foreground">{t("nodes.nodeDetail.profileNotFound")}</span>
           ) : null
         }
       />
@@ -157,7 +163,12 @@ export function NodesDetailPage() {
             <AlertsTab key={`alerts-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "profile" && tab.id === "profile" ? (
-            <ProfileTab key={`profile-${nodeId}`} nodeId={nodeId} token={token} />
+            <ProfileTab
+              key={`profile-${nodeId}`}
+              node={node}
+              isLoading={nodeLoading}
+              loadFailed={nodeLoadFailed}
+            />
           ) : null}
           {activeTab === "anomaly" && tab.id === "anomaly" ? (
             <AnomalyTab key={`anomaly-${nodeId}`} nodeId={nodeId} token={token} />
