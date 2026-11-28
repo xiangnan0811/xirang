@@ -27,6 +27,13 @@
 - 缺失的静态分块返回 404。浏览器的 Service Worker 跳过脚本缓存中的 HTML 响应，资源恢复后可通过重新加载页面取回脚本。
 - Core 和 Worker 镜像更新到 `libxml2 2.13.9-r2`，修复扫描中发现的七个高危漏洞。同时更新 Alpine 仓库已下架的 OpenSSL、Expat 和 Worker Zstd 固定版本。
 
+## [0.74.5](https://github.com/xiangnan0811/xirang/compare/v0.74.4...v0.74.5) (2026-11-28)
+
+
+### 🐛 Bug Fixes
+
+* **nodes:** 修复节点配置、连接探测与恢复并发 ([#749](https://github.com/xiangnan0811/xirang/issues/749)) ([2cffd57](https://github.com/xiangnan0811/xirang/commit/2cffd57deac452238b925f75aa628187dcf9fe19))
+
 ## [0.74.4](https://github.com/xiangnan0811/xirang/compare/v0.74.3...v0.74.4) (2026-11-25)
 
 
