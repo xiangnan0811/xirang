@@ -175,7 +175,7 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("关联策略（可选）")).toHaveValue("");
     expect(screen.getByLabelText("Cron（可选）")).toHaveValue("");
     expect(screen.getByLabelText("Rsync 源路径（可选）")).toHaveValue("");
-    // rsync 模式下目标路径不再是输入框，而是自动生成的只读显示
+    expect(screen.getByText("任务创建成功后由系统分配")).toBeInTheDocument();
   });
 
   it("编辑 Rsync 任务时仅显示安全的恢复点状态摘要", () => {
@@ -248,7 +248,7 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByText("AWS S3 原生版本")).toBeInTheDocument();
     expect(screen.getByText("已就绪")).toBeInTheDocument();
     expect(screen.getByLabelText("执行器类型")).toBeDisabled();
-    expect(screen.queryByLabelText("Rclone 远程路径")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Rclone 远端路径（可选）")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("带宽限制（可选）")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("并发传输数（可选）")).not.toBeInTheDocument();
     expect(screen.getByText("受管目标与发布配置只能通过 Rclone 版本化管理修改。")).toBeInTheDocument();
@@ -355,5 +355,135 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("任务名称")).toHaveValue("未保存的草稿名");
     expect(screen.getByText("任务已被更新")).toBeInTheDocument();
     expect(screen.getByText(/关闭后重新打开编辑/)).toBeInTheDocument();
+  });
+
+  it.each([
+    { executorType: "rsync" as const, policyValue: "1", sourceLabel: "Rsync 源路径（可选）" },
+    { executorType: "restic" as const, policyValue: "", sourceLabel: "源路径（可选）" },
+  ])("新建 $executorType 任务不按节点目录猜测目标且不提交目标（策略：$policyValue）", async ({ executorType, policyValue, sourceLabel }) => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onCreate={onCreate}
+        editingTask={null}
+      />
+    );
+
+    await user.selectOptions(screen.getByLabelText("执行器类型"), executorType);
+    expect(screen.getByText("备份目标路径:")).toBeInTheDocument();
+    expect(screen.getByText("任务创建成功后由系统分配")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("任务名称"), "新任务");
+    await user.selectOptions(screen.getByLabelText("目标节点"), "1");
+    await user.selectOptions(screen.getByLabelText("关联策略（可选）"), policyValue);
+    await user.type(screen.getByLabelText(sourceLabel), "/data/app");
+    if (executorType === "restic") {
+      await user.type(screen.getByLabelText("仓库密码"), "FAKE repo password");
+    }
+
+    expect(screen.getByText("任务创建成功后由系统分配")).toBeInTheDocument();
+    expect(screen.queryByText(/\/backup\//)).not.toBeInTheDocument();
+    expect(screen.queryByText(/专属目录/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    const payload = onCreate.mock.calls[0][0];
+    expect(payload).toEqual({
+      name: "新任务",
+      nodeId: 1,
+      policyId: policyValue ? 1 : null,
+      dependsOnTaskId: null,
+      executorType,
+      rsyncSource: "/data/app",
+      executorConfig: executorType === "restic"
+        ? JSON.stringify({ repository_password: "FAKE repo password", exclude_patterns: [] })
+        : undefined,
+    });
+    expect(payload.rsyncTarget).toBeUndefined();
+  });
+
+  it.each(["rsync", "restic"] as const)("编辑 %s 任务保留已保存目标中的连续空格", (executorType) => {
+    const savedTarget = "/backup/project  archive/end";
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        editingTask={{ ...createTask(), executorType, rsyncTarget: savedTarget }}
+      />
+    );
+
+    expect(screen.getByText("备份目标路径:")).toBeInTheDocument();
+    expect(screen.getByText(savedTarget, { normalizer: (text) => text })).toBeVisible();
+    expect(screen.queryByText("任务创建成功后由系统分配")).not.toBeInTheDocument();
+    expect(screen.queryByText("此任务未记录目标路径")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { executorType: "rsync" as const, rsyncTarget: undefined },
+    { executorType: "rsync" as const, rsyncTarget: "   " },
+    { executorType: "restic" as const, rsyncTarget: undefined },
+    { executorType: "restic" as const, rsyncTarget: "" },
+  ])("编辑 $executorType 任务缺少已保存目标时说明未记录且不猜测路径（$rsyncTarget）", async ({ executorType, rsyncTarget }) => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={onUpdate}
+        editingTask={{ ...createTask(), executorType, rsyncTarget }}
+      />
+    );
+
+    expect(screen.getByText("备份目标路径:")).toBeInTheDocument();
+    expect(screen.getByText("此任务未记录目标路径")).toBeInTheDocument();
+    expect(screen.queryByText(/\/backup\//)).not.toBeInTheDocument();
+    expect(screen.queryByText("任务创建成功后由系统分配")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(onUpdate).toHaveBeenCalledWith({ expectedRevision: "9007199254740993" });
+    expect(onUpdate.mock.calls[0][0]).not.toHaveProperty("rsyncTarget");
+  });
+
+  it("切换到 Rclone 修改远端后切回 Rsync 仍显示已保存目标且不提交目标", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={onUpdate}
+        editingTask={createTask()}
+      />
+    );
+
+    await user.selectOptions(screen.getByLabelText("执行器类型"), "rclone");
+    const remote = screen.getByLabelText("Rclone 远端路径（可选）");
+    expect(remote).toHaveValue("/old/target");
+    await user.clear(remote);
+    await user.type(remote, "s3:draft-bucket/changed");
+    await user.selectOptions(screen.getByLabelText("执行器类型"), "rsync");
+
+    expect(screen.getByText("/old/target")).toBeInTheDocument();
+    expect(screen.queryByText("s3:draft-bucket/changed")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(onUpdate).toHaveBeenCalledWith({ expectedRevision: "9007199254740993" });
+    expect(onUpdate.mock.calls[0][0]).not.toHaveProperty("rsyncTarget");
+    expect(onUpdate.mock.calls[0][0]).not.toHaveProperty("executorType");
   });
 });

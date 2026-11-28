@@ -1439,8 +1439,8 @@ const zh = {
     errorNodeRequired: "保存失败：请选择目标节点。",
     errorNameRequired: "保存失败：请输入任务名称。",
     autoTargetPath: "备份目标路径",
-    autoTargetHint: "本地备份数据将自动存储到该节点的专属目录下",
-    selectNodeFirst: "请先选择节点",
+    autoTargetAssignedOnCreate: "任务创建成功后由系统分配",
+    autoTargetNotRecorded: "此任务未记录目标路径",
   },
 
   // ── logs page ──

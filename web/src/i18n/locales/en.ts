@@ -1439,8 +1439,8 @@ const en = {
     errorNodeRequired: "Save failed: please select a target node.",
     errorNameRequired: "Save failed: please enter a task name.",
     autoTargetPath: "Backup Target Path",
-    autoTargetHint: "Backup data will be automatically stored in this node's dedicated directory",
-    selectNodeFirst: "Please select a node first",
+    autoTargetAssignedOnCreate: "Assigned by the system after the task is created",
+    autoTargetNotRecorded: "No target path is recorded for this task",
   },
 
   // ── logs page ──
