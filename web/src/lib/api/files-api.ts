@@ -81,9 +81,27 @@ export function createFilesApi() {
       path: string,
       options?: { signal?: AbortSignal }
     ): Promise<FileListResult> {
-      const query = new URLSearchParams({ path });
+      // path_exact=1: the browser only sends canonical paths from earlier responses, so the
+      // backend must use them verbatim (e.g. keep trailing spaces) instead of trimming.
+      const query = new URLSearchParams({ path, path_exact: "1" });
       const raw = await request<RawFileListResult>(
         `/nodes/${nodeId}/files?${query.toString()}`,
+        { token, signal: options?.signal }
+      );
+      return mapFileListResult(raw);
+    },
+
+    /**
+     * Lists the server-selected starting directory. `path` is deliberately
+     * omitted: the backend only auto-selects when the key is absent.
+     */
+    async listNodeInitialFiles(
+      token: string,
+      nodeId: number,
+      options?: { signal?: AbortSignal }
+    ): Promise<FileListResult> {
+      const raw = await request<RawFileListResult>(
+        `/nodes/${nodeId}/files?initial=1`,
         { token, signal: options?.signal }
       );
       return mapFileListResult(raw);
@@ -95,7 +113,7 @@ export function createFilesApi() {
       path: string,
       options?: { signal?: AbortSignal }
     ): Promise<FileContentResult> {
-      const query = new URLSearchParams({ path });
+      const query = new URLSearchParams({ path, path_exact: "1" });
       const raw = await request<RawFileContentResult>(
         `/nodes/${nodeId}/files/content?${query.toString()}`,
         { token, signal: options?.signal }

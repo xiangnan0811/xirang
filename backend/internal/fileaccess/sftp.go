@@ -2,6 +2,8 @@ package fileaccess
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,6 +58,57 @@ func NewSFTPCompatibilityEnumerator(client *sftp.Client) DirectoryEnumerator {
 	return sftpCompatibilityEnumerator{client: client}
 }
 
+// ErrInitialRootUnavailable identifies an initial root that cannot resolve to a directory.
+var ErrInitialRootUnavailable = errors.New("initial root unavailable")
+
+// ErrInitialRootReadDenied identifies a directory read denied before entries were read.
+var ErrInitialRootReadDenied = errors.New("initial root directory read denied")
+
+var errSFTPEmptyReadDenied = errors.New("SFTP directory read denied before entries")
+
+// ListInitialRoot resolves a configured root and keeps its canonical path as
+// the containment anchor throughout the checked listing.
+func (tree *SFTPTree) ListInitialRoot(ctx context.Context, root Root, request PageRequest) (string, EntryPage, error) {
+	if err := contextError(ctx); err != nil {
+		return "", EntryPage{}, err
+	}
+	if tree == nil || tree.backend == nil {
+		return "", EntryPage{}, ErrStrictUnavailable
+	}
+	canonical, err := tree.backend.RealPath(filepath.Clean(root.Path))
+	if ctxErr := contextError(ctx); ctxErr != nil {
+		return "", EntryPage{}, ctxErr
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			return "", EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootUnavailable, err)
+		}
+		return "", EntryPage{}, err
+	}
+	canonical = filepath.Clean(canonical)
+	if _, _, err := resolveCleanRoot(canonical, RootLocator(), LegacyPolicy); err != nil {
+		return "", EntryPage{}, err
+	}
+	request, err = request.Normalize()
+	if err != nil {
+		return "", EntryPage{}, err
+	}
+	if tree.enumerator == nil {
+		return "", EntryPage{}, ErrStrictUnavailable
+	}
+	page, err := tree.listChecked(ctx, canonical, canonical, LegacyPolicy, request, true)
+	if errors.Is(err, ErrNotDirectory) {
+		return "", EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootUnavailable, err)
+	}
+	if errors.Is(err, errSFTPEmptyReadDenied) {
+		return "", EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootReadDenied, err)
+	}
+	if err != nil {
+		return "", EntryPage{}, err
+	}
+	return canonical, page, nil
+}
+
 func (tree *SFTPTree) List(ctx context.Context, root Root, locator Locator, policy Policy, request PageRequest) (EntryPage, error) {
 	if err := contextError(ctx); err != nil {
 		return EntryPage{}, err
@@ -74,8 +127,18 @@ func (tree *SFTPTree) List(ctx context.Context, root Root, locator Locator, poli
 	if err != nil {
 		return EntryPage{}, err
 	}
+	return tree.listChecked(ctx, candidate, canonicalRoot, policy, request, false)
+}
+
+func (tree *SFTPTree) listChecked(ctx context.Context, candidate, canonicalRoot string, policy Policy, request PageRequest, fixedAnchor bool) (EntryPage, error) {
 	candidateInfo, err := tree.backend.Lstat(candidate)
 	if err != nil {
+		if fixedAnchor && errors.Is(err, os.ErrNotExist) && contextError(ctx) == nil {
+			return EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootUnavailable, err)
+		}
+		if fixedAnchor && errors.Is(err, os.ErrPermission) && contextError(ctx) == nil {
+			return EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootReadDenied, err)
+		}
 		return EntryPage{}, err
 	}
 	if policy == ProviderPolicy && candidateInfo.Mode()&os.ModeSymlink != 0 {
@@ -83,11 +146,17 @@ func (tree *SFTPTree) List(ctx context.Context, root Root, locator Locator, poli
 	}
 	candidateSnapshot := snapshotFileInfo(candidateInfo)
 	resolved, err := tree.backend.RealPath(candidate)
+	if fixedAnchor && (err != nil || resolved != canonicalRoot) {
+		return EntryPage{}, ErrSourceChanged
+	}
 	if err != nil || !Contains(canonicalRoot, resolved) {
 		return EntryPage{}, ErrOutsideRoot
 	}
 	info, err := tree.backend.Lstat(resolved)
 	if err != nil {
+		if fixedAnchor && errors.Is(err, os.ErrPermission) && contextError(ctx) == nil {
+			return EntryPage{}, fmt.Errorf("%w: %w", ErrInitialRootReadDenied, err)
+		}
 		return EntryPage{}, err
 	}
 	if !info.IsDir() {
@@ -96,6 +165,9 @@ func (tree *SFTPTree) List(ctx context.Context, root Root, locator Locator, poli
 	targetSnapshot := snapshotFileInfo(info)
 	names, err := tree.enumerator.Enumerate(ctx, resolved, EnumerationLimits{MaxItems: request.MaxItems, MaxBytes: request.MaxBytes})
 	if err != nil {
+		if ctxErr := contextError(ctx); ctxErr != nil {
+			return EntryPage{}, ctxErr
+		}
 		return EntryPage{}, err
 	}
 	if len(names) > request.MaxItems {
@@ -147,6 +219,11 @@ func (tree *SFTPTree) List(ctx context.Context, root Root, locator Locator, poli
 		!Contains(canonicalRoot, postResolved) || snapshotFileInfo(postCandidate) != candidateSnapshot ||
 		snapshotFileInfo(postTarget) != targetSnapshot {
 		return EntryPage{}, ErrSourceChanged
+	}
+	if fixedAnchor {
+		if err := contextError(ctx); err != nil {
+			return EntryPage{}, err
+		}
 	}
 	return collector.Page(), nil
 }
@@ -270,7 +347,12 @@ func (tree *SFTPTree) resolve(root Root, locator Locator, policy Policy) (string
 	if err != nil {
 		return "", "", "", err
 	}
-	relative, candidate, err := Resolve(Root{Path: canonicalRoot}, locator, policy)
+	var relative, candidate string
+	if policy == LegacyPolicy {
+		relative, candidate, err = resolveCleanRoot(filepath.Clean(canonicalRoot), locator, policy)
+	} else {
+		relative, candidate, err = Resolve(Root{Path: canonicalRoot}, locator, policy)
+	}
 	if err != nil {
 		return "", "", "", err
 	}
@@ -353,6 +435,9 @@ func (enumerator sftpCompatibilityEnumerator) Enumerate(ctx context.Context, dir
 	}
 	infos, err := enumerator.client.ReadDir(directory)
 	if err != nil {
+		if len(infos) == 0 && errors.Is(err, os.ErrPermission) && contextError(ctx) == nil {
+			return nil, fmt.Errorf("%w: %w", errSFTPEmptyReadDenied, err)
+		}
 		return nil, err
 	}
 	if len(infos) > limits.MaxItems {

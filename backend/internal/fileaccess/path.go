@@ -39,6 +39,10 @@ func ParseLocator(raw string, policy Policy) (Locator, error) {
 
 func Resolve(root Root, locator Locator, policy Policy) (string, string, error) {
 	cleanRoot := filepath.Clean(strings.TrimSpace(root.Path))
+	return resolveCleanRoot(cleanRoot, locator, policy)
+}
+
+func resolveCleanRoot(cleanRoot string, locator Locator, policy Policy) (string, string, error) {
 	if cleanRoot == "." || !filepath.IsAbs(cleanRoot) {
 		return "", "", fmt.Errorf("%w: root must be absolute", ErrOutsideRoot)
 	}

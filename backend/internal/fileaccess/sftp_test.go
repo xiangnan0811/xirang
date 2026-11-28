@@ -62,6 +62,66 @@ func (enumerator localBoundedEnumerator) Enumerate(context.Context, string, Enum
 	return append([]string(nil), enumerator.names...), nil
 }
 
+type changingRealPathBackend struct {
+	*localSFTPBackend
+	calls       int
+	changeAt    int
+	replacement string
+}
+
+func (backend *changingRealPathBackend) RealPath(path string) (string, error) {
+	backend.calls++
+	if backend.calls >= backend.changeAt {
+		return backend.replacement, nil
+	}
+	return backend.localSFTPBackend.RealPath(path)
+}
+
+func TestSFTPInitialRootKeepsCanonicalAnchor(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, changeAt := range []int{2, 3} {
+		backend := &changingRealPathBackend{localSFTPBackend: &localSFTPBackend{}, changeAt: changeAt, replacement: parent}
+		enumerated := false
+		tree := NewSFTPTree(backend, localBoundedEnumerator{bounded: true, hook: func() { enumerated = true }}, nil)
+		path, page, err := tree.ListInitialRoot(context.Background(), Root{Path: root}, PageRequest{Limit: 10, MaxItems: 10, MaxBytes: 1024})
+		if !errors.Is(err, ErrSourceChanged) || path != "" || len(page.Items) != 0 {
+			t.Fatalf("change at call %d: path=%q page=%+v err=%v", changeAt, path, page, err)
+		}
+		if enumerated != (changeAt == 3) {
+			t.Fatalf("change at call %d: enumerated=%v", changeAt, enumerated)
+		}
+	}
+}
+
+func TestSFTPInitialRootDoesNotTreatEntryFailureAsMissingRoot(t *testing.T) {
+	root := t.TempDir()
+	tree := NewSFTPTree(&localSFTPBackend{}, localBoundedEnumerator{bounded: true, names: []string{"disappeared"}}, nil)
+	_, _, err := tree.ListInitialRoot(context.Background(), Root{Path: root}, PageRequest{Limit: 10, MaxItems: 10, MaxBytes: 1024})
+	if !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrInitialRootUnavailable) || errors.Is(err, ErrInitialRootReadDenied) {
+		t.Fatalf("entry disappearance error=%v", err)
+	}
+}
+
+func TestSFTPInitialRootStopsOnLimitsAndCancellation(t *testing.T) {
+	root := t.TempDir()
+	request := PageRequest{Limit: 1, MaxItems: 2, MaxBytes: 1024}
+	tree := NewSFTPTree(&localSFTPBackend{}, localBoundedEnumerator{bounded: true, names: []string{"a", "b", "c"}}, nil)
+	_, _, err := tree.ListInitialRoot(context.Background(), Root{Path: root}, request)
+	if !errors.Is(err, ErrResourceLimit) || errors.Is(err, ErrInitialRootUnavailable) || errors.Is(err, ErrInitialRootReadDenied) {
+		t.Fatalf("limit error=%v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	tree = NewSFTPTree(&localSFTPBackend{}, localBoundedEnumerator{bounded: true, hook: cancel}, nil)
+	_, _, err = tree.ListInitialRoot(ctx, Root{Path: root}, request)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrInitialRootUnavailable) || errors.Is(err, ErrInitialRootReadDenied) {
+		t.Fatalf("cancellation error=%v", err)
+	}
+}
+
 func TestSFTPStrictRequiresBoundedEnumerator(t *testing.T) {
 	tree := NewSFTPTree(&localSFTPBackend{}, nil, nil)
 	_, err := tree.List(context.Background(), Root{Path: t.TempDir()}, RootLocator(), ProviderPolicy, PageRequest{Limit: 1, MaxItems: 10, MaxBytes: 1024})

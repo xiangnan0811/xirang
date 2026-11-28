@@ -42,6 +42,8 @@ admin。告警单条/批量失败投递重发使用 `/alert-deliveries/:id/retry
 
 `GET /api/v1/nodes/:id/files` 与 `GET /api/v1/nodes/:id/files/content` 使用 `nodes:files` 与 `OwnershipNodeCheck`，仅允许本节点的 `BasePath` 及本节点 `Task.RsyncSource`（`FILE_BROWSER_ALLOW_ALL=true` 仅在开发环境允许根外路径，生产环境 403 拒绝）。合法根内路径（含 `..` 前缀合法文件名、指向根内的软链接、`BasePath` 自身为软链接，以及仅具 `0111` 遍历权限的父目录）经 `RealPath` 解析通过后访问；越界或他节点路径返回 403 且零目录项／文件字节泄露。文件预览在 SFTP 读取与 `Close()` 后复用同一 SSH 连接执行 `python3`，从 `/` 经允许根以 `(O_PATH | O_DIRECTORY | O_NOFOLLOW)` + `dir_fd` 逐级遍历至目标普通文件（`O_RDONLY | O_NOFOLLOW`），核验读取前后目录链 `(st_dev, st_ino)`、文件 `fstat` 身份、大小、读取字节数与 SHA-256 摘要；读取期间被修改或打开时软链接掉包并在打开后恢复原路径均返回 502（`"文件在读取期间发生变化"`），不返回缓冲内容，并在 `credential_audit_events` 记录 `stage="post_check"`、`outcome="failure"`。
 
+节点文件标签首次打开时，使用 `GET /api/v1/nodes/:id/files?initial=1` 请求服务端选择起始目录。服务端先尝试配置的 `BasePath`（含显式 `/`），再尝试该节点已有授权的任务源目录。在同一个有时限的 SSH/SFTP 会话中选择并列举目录，返回实际路径与目录项。浏览器以该路径作为初始导航根。未找到可用目录时显示错误，重试重新选择。后续列表和预览请求用 `path_exact=1` 原样传递绝对路径（包括目录名和文件名中的空格），服务端继续校验当前授权。未启用精确模式的客户端沿用原路径处理。只有省略 `path` 时才启用 `initial=1`，旧客户端省略路径或传入空路径仍请求 `/`。
+
 操作入口与对话框挂载同时检查权限，缺失角色不授予写能力。降权清除不再合法的写草稿、
 打开状态和写选择，恢复权限不自动恢复旧表单；合法只读导出与详情不随之关闭。
 节点表单在写入成功后才关闭并测试连接。保存失败保留当前草稿，供用户修正或重试。

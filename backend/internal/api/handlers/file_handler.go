@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -78,10 +79,14 @@ func NewFileHandler(db *gorm.DB) *FileHandler {
 // @Produce      json
 // @Param        id    path      int     true   "节点 ID"
 // @Param        path  query     string  false  "目录路径（默认 /）"
+// @Param        initial query   string  false  "值为 1 且未提供 path 时自动选择初始目录"
+// @Param        path_exact query string false "值为 1 时保留绝对 path 的空白字符"
 // @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
+// @Failure      500  {object}  handlers.Response
 // @Failure      502  {object}  handlers.Response
 // @Router       /nodes/{id}/files [get]
 func (h *FileHandler) ListNodeFiles(c *gin.Context) {
@@ -90,23 +95,50 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 		return
 	}
 
-	rawPath := strings.TrimSpace(c.Query("path"))
+	_, hasPath := c.GetQuery("path")
+	initial := !hasPath && c.Query("initial") == "1"
+	rawPath, ok := fileBrowserQueryPath(c)
+	if !ok {
+		return
+	}
 	if rawPath == "" {
 		rawPath = "/"
 	}
+	opCtx := c.Request.Context()
+	if initial {
+		var cancel context.CancelFunc
+		opCtx, cancel = context.WithTimeout(opCtx, 20*time.Second)
+		defer cancel()
+	}
 
 	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, nodeID).Error; err != nil {
-		respondNotFound(c, "节点不存在")
+	nodeDB := h.db
+	if initial {
+		nodeDB = nodeDB.WithContext(opCtx)
+	}
+	if err := nodeDB.Preload("SSHKey").First(&node, nodeID).Error; err != nil {
+		if !initial || errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "节点不存在")
+		} else {
+			respondInternalError(c, err)
+		}
 		return
 	}
-	roots, err := loadNodeFileRoots(c.Request.Context(), h.db, node)
+	roots, err := loadNodeFileRoots(opCtx, h.db, node)
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	client, sftpClient, credential, err := dialSFTP(c.Request.Context(), node, h.db)
+	var client *ssh.Client
+	var sftpClient *sftp.Client
+	var credential sshutil.ResolvedCredential
+	var stopClose func() bool
+	if initial {
+		client, sftpClient, credential, stopClose, err = dialSFTPConnection(opCtx, node, h.db, true)
+	} else {
+		client, sftpClient, credential, err = dialSFTP(opCtx, node, h.db)
+	}
 	if err != nil {
 		logFileHandlerFailure("error", node.ID, "dial", rawPath, "SFTP 连接失败")
 		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialAuditSSHOutcome("dial", err), err, map[string]any{
@@ -114,6 +146,15 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 			"path_hash": safePathHash(rawPath),
 		})
 		respondBadGateway(c, "SFTP 连接失败，请检查节点连接配置")
+		return
+	}
+	if initial {
+		defer func() {
+			stopClose()
+			_ = client.Close()
+			_ = sftpClient.Close()
+		}()
+		h.listInitialNodeFiles(c, opCtx, node, credential, client, sftpClient, roots)
 		return
 	}
 	defer sftpClient.Close() //nolint:errcheck
@@ -165,6 +206,76 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 	})
 }
 
+func (h *FileHandler) listInitialNodeFiles(c *gin.Context, ctx context.Context, node model.Node, credential sshutil.ResolvedCredential, client *ssh.Client, sftpClient *sftp.Client, roots []fileaccess.Root) {
+	const safeInitialPath = "initial"
+	allowAll := util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true"
+	if allowAll && !util.IsDevelopmentEnv() {
+		err := errors.New("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
+		logFileHandlerFailure("warn", node.ID, "path_validate", safeInitialPath, "节点路径校验拒绝")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeBlocked, err, map[string]any{
+			"stage": "path_validate", "path_hash": safePathHash(safeInitialPath),
+		})
+		respondForbidden(c, err.Error())
+		return
+	}
+
+	firstTask := 0
+	if strings.TrimSpace(node.BasePath) != "" && len(roots) > 0 {
+		firstTask = 1
+	}
+	sort.Slice(roots[firstTask:], func(i, j int) bool {
+		return roots[firstTask+i].Path < roots[firstTask+j].Path
+	})
+	if allowAll {
+		roots = append(roots, fileaccess.Root{Path: string(filepath.Separator)})
+	}
+	tree := fileaccess.NewSFTPClientTree(sftpClient, fileaccess.NewSFTPCompatibilityEnumerator(sftpClient), func() error {
+		_ = client.Close()
+		return sftpClient.Close()
+	})
+	request := fileaccess.PageRequest{Limit: dirListMaxEntries, MaxItems: dirListMaxScanned, MaxBytes: dirListMaxNameBytes}
+	var readErr error
+	for _, root := range roots {
+		cleanPath, page, err := tree.ListInitialRoot(ctx, root, request)
+		if err != nil {
+			switch {
+			case errors.Is(err, fileaccess.ErrInitialRootUnavailable):
+				continue
+			case errors.Is(err, fileaccess.ErrInitialRootReadDenied):
+				readErr = err
+				continue
+			default:
+				readErr = err
+			}
+			break
+		}
+		entries := fileEntriesFromAccess(fileaccess.Root{Path: cleanPath}, page)
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeSuccess, nil, map[string]any{
+			"stage": "success", "kind": "directory", "path_hash": safePathHash(cleanPath),
+			"count": len(entries), "truncated": page.HasMore, "preview_size": 0,
+		})
+		respondOK(c, FileListResponse{Path: cleanPath, Entries: entries, Truncated: page.HasMore})
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		readErr = err
+	}
+	if readErr != nil {
+		logFileHandlerFailure("error", node.ID, "read_dir", safeInitialPath, "SFTP 读取目录失败")
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeFailure, readErr, map[string]any{
+			"stage": "read_dir", "path_hash": safePathHash(safeInitialPath),
+		})
+		respondBadGateway(c, "读取目录失败")
+		return
+	}
+	err := errors.New("路径不存在或不可访问")
+	logFileHandlerFailure("warn", node.ID, "path_validate", safeInitialPath, "节点路径校验拒绝")
+	h.writeFileBrowserAudit(c, node, credential, "file_browser.list", credentialaudit.OutcomeBlocked, err, map[string]any{
+		"stage": "path_validate", "path_hash": safePathHash(safeInitialPath),
+	})
+	respondForbidden(c, err.Error())
+}
+
 // GetNodeFileContent godoc
 // @Summary      获取节点文件内容
 // @Description  通过 SFTP 读取远端节点指定文件内容（最大 1MB，超出截断）
@@ -173,6 +284,7 @@ func (h *FileHandler) ListNodeFiles(c *gin.Context) {
 // @Produce      json
 // @Param        id    path      int     true  "节点 ID"
 // @Param        path  query     string  true  "文件路径"
+// @Param        path_exact query string false "值为 1 时保留绝对 path 的空白字符"
 // @Success      200  {object}  handlers.Response
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
@@ -186,7 +298,10 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		return
 	}
 
-	rawPath := strings.TrimSpace(c.Query("path"))
+	rawPath, ok := fileBrowserQueryPath(c)
+	if !ok {
+		return
+	}
 	if rawPath == "" {
 		respondBadRequest(c, "请指定文件路径")
 		return
@@ -406,15 +521,32 @@ func (h *FileHandler) writeFileBrowserAudit(c *gin.Context, node model.Node, cre
 	writeCredentialAuditFromGin(c, h.db, event)
 }
 
+func fileBrowserQueryPath(c *gin.Context) (string, bool) {
+	raw := c.Query("path")
+	if c.Query("path_exact") != "1" || strings.TrimSpace(raw) == "" {
+		return strings.TrimSpace(raw), true
+	}
+	if !filepath.IsAbs(raw) {
+		respondBadRequest(c, "路径必须为绝对路径")
+		return "", false
+	}
+	return raw, true
+}
+
 // dialSFTP 建立 SSH+SFTP 会话。
 func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, *sftp.Client, sshutil.ResolvedCredential, error) {
+	client, sftpClient, credential, _, err := dialSFTPConnection(ctx, node, db, false)
+	return client, sftpClient, credential, err
+}
+
+func dialSFTPConnection(ctx context.Context, node model.Node, db *gorm.DB, closeOnCancel bool) (*ssh.Client, *sftp.Client, sshutil.ResolvedCredential, func() bool, error) {
 	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeFileBrowser)
 	if err != nil {
-		return nil, nil, credential, err
+		return nil, nil, credential, nil, err
 	}
 	hostKey, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		return nil, nil, credential, err
+		return nil, nil, credential, nil, err
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -423,15 +555,22 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, *
 	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	sshClient, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
 	if err != nil {
-		return nil, nil, credential, err
+		return nil, nil, credential, nil, err
+	}
+	var stopClose func() bool
+	if closeOnCancel {
+		stopClose = context.AfterFunc(ctx, func() { _ = sshClient.Close() })
 	}
 
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
+		if stopClose != nil {
+			stopClose()
+		}
 		_ = sshClient.Close()
-		return nil, nil, credential, fmt.Errorf("SFTP 子系统初始化失败: %w", err)
+		return nil, nil, credential, nil, fmt.Errorf("SFTP 子系统初始化失败: %w", err)
 	}
-	return sshClient, sftpClient, credential, nil
+	return sshClient, sftpClient, credential, stopClose, nil
 }
 
 // realPathResolver 抽象出"把任意路径解析为节点端真实绝对路径"的能力。
@@ -579,7 +718,16 @@ func verifyNodeFilePreviewOverSSH(
 	if sshClient == nil {
 		return fileaccess.ErrSourceChanged
 	}
-	_, candidate, err := fileaccess.Resolve(accessRoot, locator, fileaccess.LegacyPolicy)
+	var candidate string
+	var err error
+	if filepath.Clean(accessRoot.Path) != filepath.Clean(strings.TrimSpace(accessRoot.Path)) && filepath.IsAbs(locator.Path) {
+		candidate = filepath.Clean(locator.Path)
+		if !fileaccess.Contains(accessRoot.Path, candidate) {
+			return fileaccess.ErrSourceChanged
+		}
+	} else {
+		_, candidate, err = fileaccess.Resolve(accessRoot, locator, fileaccess.LegacyPolicy)
+	}
 	if err != nil {
 		return fileaccess.ErrSourceChanged
 	}

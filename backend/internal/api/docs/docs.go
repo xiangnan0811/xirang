@@ -7542,11 +7542,29 @@ const docTemplate = `{
                         "description": "目录路径（默认 /）",
                         "name": "path",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 且未提供 path 时自动选择初始目录",
+                        "name": "initial",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 时保留绝对 path 的空白字符",
+                        "name": "path_exact",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7565,6 +7583,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7607,6 +7631,12 @@ const docTemplate = `{
                         "name": "path",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 时保留绝对 path 的空白字符",
+                        "name": "path_exact",
+                        "in": "query"
                     }
                 ],
                 "responses": {

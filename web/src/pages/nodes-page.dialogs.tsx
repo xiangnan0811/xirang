@@ -249,12 +249,10 @@ export function NodesPageDialogs({
               <ErrorBoundary>
                 {fileBrowserTab === "files" ? (
                   <FileBrowser
-                    rootPath={
-                      fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
-                        ? fileBrowserNode.basePath
-                        : fileBrowserNode.username === "root"
-                          ? "/root"
-                          : `/home/${fileBrowserNode.username}`
+                    // A new node is a new browsing session; never carry entries or root across nodes.
+                    key={fileBrowserNode.id}
+                    fetchInitialDir={(signal) =>
+                      filesApi.listNodeInitialFiles(token, fileBrowserNode.id, { signal })
                     }
                     fetchDir={(path, signal) =>
                       filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })
