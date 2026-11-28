@@ -55,7 +55,6 @@ type nodeRequest struct {
 	PrivateKey       string  `json:"private_key"`
 	SSHKeyID         *uint   `json:"ssh_key_id"`
 	Tags             string  `json:"tags"`
-	Status           string  `json:"status"`
 	BasePath         string  `json:"base_path"`
 	BackupDir        string  `json:"backup_dir"`
 	MaintenanceStart *string `json:"maintenance_start" extensions:"x-nullable"`
@@ -63,6 +62,8 @@ type nodeRequest struct {
 	ExpiryDate       *string `json:"expiry_date" extensions:"x-nullable"`
 	Archived         *bool   `json:"archived"`
 	UseSudo          *bool   `json:"use_sudo"`
+	// Status accepts exactly online, warning, or offline. Other nonempty values return 400. Omitted, null, or empty values default to offline on create and preserve the stored status on update.
+	Status string `json:"status" extensions:"x-nullable"`
 }
 type nodeUpdateResponse struct {
 	Node    model.Node `json:"node"`

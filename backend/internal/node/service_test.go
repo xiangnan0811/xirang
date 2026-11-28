@@ -67,9 +67,9 @@ func TestNodeUpdatePreservesProbeAndOmittedDefaults(t *testing.T) {
 	if updated.Port != 22 || updated.AuthType != "password" || updated.Password != "secret" || updated.BasePath != "/backup" || updated.BackupDir != "node" {
 		t.Fatalf("omitted defaults changed: %#v", updated.Sanitized())
 	}
-	input.Status = "maintenance"
+	input.Status = "warning"
 	updated, _, err = service.Update(ctx, existing.ID, input)
-	if err != nil || updated.Status != "maintenance" || updated.ConnectionLatency != 42 {
+	if err != nil || updated.Status != "warning" || updated.ConnectionLatency != 42 {
 		t.Fatalf("explicit status failed: %v", err)
 	}
 }

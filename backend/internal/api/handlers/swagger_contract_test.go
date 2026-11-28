@@ -10,13 +10,15 @@ import (
 )
 
 type generatedSwaggerContractSchema struct {
-	Ref        string                                    `json:"$ref"`
-	Type       string                                    `json:"type"`
-	Format     string                                    `json:"format"`
-	Required   []string                                  `json:"required"`
-	Properties map[string]generatedSwaggerContractSchema `json:"properties"`
-	AllOf      []generatedSwaggerContractSchema          `json:"allOf"`
-	Nullable   bool                                      `json:"x-nullable"`
+	Ref         string                                    `json:"$ref"`
+	Type        string                                    `json:"type"`
+	Format      string                                    `json:"format"`
+	Description string                                    `json:"description"`
+	Enum        []string                                  `json:"enum"`
+	Required    []string                                  `json:"required"`
+	Properties  map[string]generatedSwaggerContractSchema `json:"properties"`
+	AllOf       []generatedSwaggerContractSchema          `json:"allOf"`
+	Nullable    bool                                      `json:"x-nullable"`
 }
 
 type generatedSwaggerContractDocument struct {
@@ -108,6 +110,26 @@ func TestGeneratedSwaggerPublishesNodeTimestampWrites(t *testing.T) {
 		}
 		if _, ok := entry.Responses["400"]; !ok {
 			t.Errorf("%s %s missing 400 response", operation.method, operation.path)
+		}
+	}
+}
+
+func TestGeneratedSwaggerPublishesNodeStatusWrites(t *testing.T) {
+	var document generatedSwaggerContractDocument
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatalf("decode generated Swagger: %v", err)
+	}
+	schema, ok := document.Definitions["internal_api_handlers.nodeRequest"]
+	if !ok {
+		t.Fatal("generated Swagger missing nodeRequest")
+	}
+	status, ok := schema.Properties["status"]
+	if !ok || status.Type != "string" || !status.Nullable || slices.Contains(schema.Required, "status") || len(status.Enum) != 0 {
+		t.Fatalf("status must be an optional nullable string without a strict enum: %+v", status)
+	}
+	for _, term := range []string{"online", "warning", "offline", "nonempty", "400", "Omitted", "null", "empty", "create", "update", "preserve the stored status"} {
+		if !strings.Contains(status.Description, term) {
+			t.Errorf("status description missing %q: %q", term, status.Description)
 		}
 	}
 }

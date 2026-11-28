@@ -20630,7 +20630,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "status": {
-                    "type": "string"
+                    "description": "Status accepts exactly online, warning, or offline. Other nonempty values return 400. Omitted, null, or empty values default to offline on create and preserve the stored status on update.",
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "tags": {
                     "type": "string"

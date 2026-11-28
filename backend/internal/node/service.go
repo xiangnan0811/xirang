@@ -55,6 +55,10 @@ func validationError(msg string) error {
 // Create validates the input and creates a new node. It returns the created
 // node with SSHKey preloaded, or an error.
 func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model.Node, error) {
+	if err := validateNodeStatus(input.Status); err != nil {
+		return nil, err
+	}
+
 	// Set defaults
 	if input.Port == 0 {
 		input.Port = 22
@@ -149,6 +153,9 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 // updated node (with SSHKey preloaded) and the previous backup directory
 // identifier (for change-warning messages), or an error.
 func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput) (*model.Node, string, error) {
+	if err := validateNodeStatus(input.Status); err != nil {
+		return nil, "", err
+	}
 	node, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, "", err
@@ -262,6 +269,15 @@ func (s *NodeService) BatchDelete(ctx context.Context, ids []uint) (int64, []uin
 }
 
 // --- validation helpers ---
+
+func validateNodeStatus(status string) error {
+	switch status {
+	case "", "online", "warning", "offline":
+		return nil
+	default:
+		return validationError("status must be online, warning, or offline")
+	}
+}
 
 func (s *NodeService) validateSSHRef(ctx context.Context, input CreateNodeInput) error {
 	switch input.AuthType {
