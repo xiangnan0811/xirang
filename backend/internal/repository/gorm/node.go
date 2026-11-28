@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"sort"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -68,15 +69,14 @@ func (r *NodeRepository) Create(ctx context.Context, node *model.Node) error {
 	if node.SSHKeyID == nil || *node.SSHKeyID == 0 {
 		return apperr.WrapDBError(r.db.WithContext(ctx).Create(node).Error)
 	}
-	return r.withPinnedSSHKey(ctx, node, false, func(tx *gorm.DB) error {
+	return r.withPinnedSSHKey(ctx, node, false, false, func(tx *gorm.DB, _ *model.Node) error {
 		return tx.Create(node).Error
 	})
 }
 
-// withPinnedSSHKey keeps a selected key alive until the node write commits.
-// Rotation fences the nodes table before key rows; an update also locks its
-// existing node row before the key to preserve that ordering.
-func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node, update bool, write func(*gorm.DB) error) error {
+// withPinnedSSHKey fences node writes against key rotation. Updates lock the
+// node row before the key; timestamp updates read their projection there too.
+func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node, update, readTimes bool, write func(*gorm.DB, *model.Node) error) error {
 	var options *sql.TxOptions
 	if r.db.Name() == "postgres" {
 		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
@@ -92,31 +92,55 @@ func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node,
 				return err
 			}
 		}
+		var existing model.Node
 		if update {
-			var existing model.Node
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&existing, node.ID).Error; err != nil {
+			fields := []string{"id"}
+			if readTimes {
+				fields = append(fields, "maintenance_start", "maintenance_end", "expiry_date")
+			}
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(fields).First(&existing, node.ID).Error; err != nil {
 				return err
 			}
 		}
-		var key model.SSHKey
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Select("id").First(&key, *node.SSHKeyID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return repository.ErrNodeSSHKeyNotFound
+		if node.SSHKeyID != nil && *node.SSHKeyID > 0 {
+			var key model.SSHKey
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Select("id").First(&key, *node.SSHKeyID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return repository.ErrNodeSSHKeyNotFound
+				}
+				return err
 			}
-			return err
 		}
-		return write(tx)
+		return write(tx, &existing)
 	}, options)
 	return apperr.WrapDBError(err)
 }
 
 // Update writes configuration fields without overwriting probe or backup results.
-func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateStatus bool) error {
-	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BasePath", "BackupDir", "UseSudo", "MaintenanceStart", "MaintenanceEnd", "ExpiryDate", "Archived", "EscalationPolicyID", "UpdatedAt"}
+func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error {
+	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BasePath", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
 	if updateStatus {
 		fields = append(fields, "Status")
 	}
-	write := func(tx *gorm.DB) error {
+	write := func(tx *gorm.DB, existing *model.Node) error {
+		if applyTimes != nil {
+			start, end, expiry := captureNodeTime(existing.MaintenanceStart), captureNodeTime(existing.MaintenanceEnd), captureNodeTime(existing.ExpiryDate)
+			if err := applyTimes(existing); err != nil {
+				return err
+			}
+			if start.changed(existing.MaintenanceStart) {
+				fields = append(fields, "MaintenanceStart")
+				node.MaintenanceStart = existing.MaintenanceStart
+			}
+			if end.changed(existing.MaintenanceEnd) {
+				fields = append(fields, "MaintenanceEnd")
+				node.MaintenanceEnd = existing.MaintenanceEnd
+			}
+			if expiry.changed(existing.ExpiryDate) {
+				fields = append(fields, "ExpiryDate")
+				node.ExpiryDate = existing.ExpiryDate
+			}
+		}
 		result := tx.Model(node).Select(fields).Updates(node)
 		if result.Error != nil {
 			return result.Error
@@ -126,10 +150,26 @@ func (r *NodeRepository) Update(ctx context.Context, node *model.Node, updateSta
 		}
 		return nil
 	}
-	if node.SSHKeyID != nil && *node.SSHKeyID > 0 {
-		return r.withPinnedSSHKey(ctx, node, true, write)
+	if applyTimes != nil || (node.SSHKeyID != nil && *node.SSHKeyID > 0) {
+		return r.withPinnedSSHKey(ctx, node, true, applyTimes != nil, write)
 	}
-	return apperr.WrapDBError(write(r.db.WithContext(ctx)))
+	return apperr.WrapDBError(write(r.db.WithContext(ctx), nil))
+}
+
+type nodeTimeSnapshot struct {
+	value time.Time
+	valid bool
+}
+
+func captureNodeTime(value *time.Time) nodeTimeSnapshot {
+	if value == nil {
+		return nodeTimeSnapshot{}
+	}
+	return nodeTimeSnapshot{value: *value, valid: true}
+}
+
+func (snapshot nodeTimeSnapshot) changed(value *time.Time) bool {
+	return snapshot.valid != (value != nil) || (snapshot.valid && !snapshot.value.Equal(*value))
 }
 
 // Delete removes a node by its primary key.

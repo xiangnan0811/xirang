@@ -99,7 +99,7 @@ func TestConfigImportReferenceWritersRejectRemovedParents(t *testing.T) {
 				t.Fatal(err)
 			}
 			current.SSHKeyID = &missingKey
-			if err := nodes.Update(ctx, current, false); !errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
+			if err := nodes.Update(ctx, current, false, nil); !errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
 				t.Fatalf("update with removed key: %v", err)
 			}
 			var stored model.Node

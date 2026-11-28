@@ -1204,6 +1204,25 @@
           ]
         },
         {
+          "name": "TestNodeTimestampWritesSQLitePostgres",
+          "required_paths": [
+            "TestNodeTimestampWritesSQLitePostgres/postgres/create-update-and-invalid",
+            "TestNodeTimestampWritesSQLitePostgres/postgres/preserve-existing-precision",
+            "TestNodeTimestampWritesSQLitePostgres/postgres/ordering-and-microseconds",
+            "TestNodeTimestampWritesSQLitePostgres/postgres/legacy-invalid-pairs",
+            "TestNodeTimestampWritesSQLitePostgres/postgres/concurrent-updates/incompatible-one-sided",
+            "TestNodeTimestampWritesSQLitePostgres/postgres/concurrent-updates/unrelated-preserves-newer"
+          ]
+        },
+        {
+          "name": "TestNodeTimestampMergeLocksSQLitePostgres",
+          "required_paths": ["TestNodeTimestampMergeLocksSQLitePostgres/postgres"]
+        },
+        {
+          "name": "TestNodeTimestampWirePostgresNonUTC",
+          "required_paths": ["TestNodeTimestampWirePostgresNonUTC"]
+        },
+        {
           "name": "TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres",
           "required_paths": ["TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres/postgres"]
         },
@@ -1303,7 +1322,6 @@
         {
           "name": "TestSettingsCompensationOwnershipMigrated",
           "required_paths": [
-            "TestSettingsCompensationOwnershipMigrated/postgres",
             "TestSettingsCompensationOwnershipMigrated/postgres/prior_writer",
             "TestSettingsCompensationOwnershipMigrated/postgres/stale_foundation",
             "TestSettingsCompensationOwnershipMigrated/postgres/later_writer",
@@ -4105,6 +4123,11 @@
     }
   ],
   "exclusions": [
+    {
+      "package": "./internal/settings",
+      "name": "TestTransitionCommitErrorClassification",
+      "reason": "transition_outcome_test.go passes synthetic commit errors and dialect labels directly to classifyTransitionError. It never opens a database, so the mixed engine loop is a census false positive."
+    },
     {
       "package": "./internal/api/handlers",
       "name": "TestNodeProbeStalledHandshakeTimesOutAndAppliesFailure",

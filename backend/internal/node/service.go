@@ -89,6 +89,10 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	if err := validateBackupDir(backupDir); err != nil {
 		return nil, validationError(err.Error())
 	}
+	applyTimes, err := optionalTimePatch(input)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build node model
 	node := model.Node{
@@ -118,6 +122,11 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 		}
 	}
 
+	if applyTimes != nil {
+		if err := applyTimes(&node); err != nil {
+			return nil, err
+		}
+	}
 	applyOptionalFields(&node, input)
 
 	if err := s.repo.Create(ctx, &node); err != nil {
@@ -188,6 +197,10 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, "", validationError(err.Error())
 	}
+	applyTimes, err := optionalTimePatch(input)
+	if err != nil {
+		return nil, "", err
+	}
 
 	// Update node fields
 	node.Name = input.Name
@@ -217,9 +230,12 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 
 	applyOptionalFields(node, input)
 
-	if err := s.repo.Update(ctx, node, updateStatus); err != nil {
+	if err := s.repo.Update(ctx, node, updateStatus, applyTimes); err != nil {
 		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
 			return nil, "", validationError("所选密钥不存在，请重新选择")
+		}
+		if errors.Is(err, apperr.ErrValidation) {
+			return nil, "", err
 		}
 		err = apperr.WrapDBError(err)
 		return nil, "", err
@@ -355,28 +371,77 @@ func SanitizeBackupDir(name string) string {
 
 // --- helpers ---
 
+type optionalTime struct {
+	set   bool
+	value *time.Time
+}
+
+func parseOptionalTime(raw *string, field string) (optionalTime, error) {
+	if raw == nil {
+		return optionalTime{}, nil
+	}
+	if *raw == "" {
+		return optionalTime{set: true}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, *raw)
+	if err != nil {
+		return optionalTime{}, validationError(field + " must be an RFC3339 timestamp")
+	}
+	parsed = parsed.UTC().Truncate(time.Microsecond)
+	if parsed.Year() < 0 || parsed.Year() > 9999 {
+		return optionalTime{}, validationError(field + " must be an RFC3339 timestamp")
+	}
+	return optionalTime{set: true, value: &parsed}, nil
+}
+
+func optionalTimePatch(input CreateNodeInput) (func(*model.Node) error, error) {
+	start, err := parseOptionalTime(input.MaintenanceStart, "maintenance_start")
+	if err != nil {
+		return nil, err
+	}
+	end, err := parseOptionalTime(input.MaintenanceEnd, "maintenance_end")
+	if err != nil {
+		return nil, err
+	}
+	expiry, err := parseOptionalTime(input.ExpiryDate, "expiry_date")
+	if err != nil {
+		return nil, err
+	}
+	if !start.set && !end.set && !expiry.set {
+		return nil, nil
+	}
+	return func(node *model.Node) error {
+		maintenanceStart, maintenanceEnd := node.MaintenanceStart, node.MaintenanceEnd
+		startChanged := setOptionalTime(&maintenanceStart, start)
+		endChanged := setOptionalTime(&maintenanceEnd, end)
+		if startChanged || endChanged {
+			if (maintenanceStart == nil) != (maintenanceEnd == nil) ||
+				(maintenanceStart != nil && !maintenanceEnd.Truncate(time.Microsecond).After(maintenanceStart.Truncate(time.Microsecond))) {
+				return validationError("maintenance_start and maintenance_end must both be set with maintenance_end after maintenance_start, or both cleared")
+			}
+		}
+		node.MaintenanceStart = maintenanceStart
+		node.MaintenanceEnd = maintenanceEnd
+		setOptionalTime(&node.ExpiryDate, expiry)
+		return nil
+	}, nil
+}
+
+func setOptionalTime(current **time.Time, patch optionalTime) bool {
+	if !patch.set {
+		return false
+	}
+	if *current == nil && patch.value == nil {
+		return false
+	}
+	if *current != nil && patch.value != nil && (*current).UTC().Truncate(time.Microsecond).Equal(*patch.value) {
+		return false
+	}
+	*current = patch.value
+	return true
+}
+
 func applyOptionalFields(node *model.Node, input CreateNodeInput) {
-	if input.MaintenanceStart != nil {
-		if *input.MaintenanceStart == "" {
-			node.MaintenanceStart = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.MaintenanceStart); err == nil {
-			node.MaintenanceStart = &t
-		}
-	}
-	if input.MaintenanceEnd != nil {
-		if *input.MaintenanceEnd == "" {
-			node.MaintenanceEnd = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.MaintenanceEnd); err == nil {
-			node.MaintenanceEnd = &t
-		}
-	}
-	if input.ExpiryDate != nil {
-		if *input.ExpiryDate == "" {
-			node.ExpiryDate = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.ExpiryDate); err == nil {
-			node.ExpiryDate = &t
-		}
-	}
 	if input.Archived != nil {
 		node.Archived = *input.Archived
 	}

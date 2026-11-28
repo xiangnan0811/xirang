@@ -7051,7 +7051,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "添加新的服务器节点",
+                "description": "添加新的服务器节点。maintenance_start、maintenance_end 和 expiry_date 可省略或为 null；空字符串表示清除，其他值必须是 RFC3339。维护时间必须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。expiry_date 可早于当前时间。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7227,7 +7227,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "更新节点配置信息",
+                "description": "更新节点配置信息。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。",
                 "consumes": [
                     "application/json"
                 ],
@@ -20600,16 +20600,19 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "expiry_date": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "host": {
                     "type": "string"
                 },
                 "maintenance_end": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "maintenance_start": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "name": {
                     "type": "string"

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"xirang/backend/internal/api/docs"
@@ -11,6 +12,7 @@ import (
 type generatedSwaggerContractSchema struct {
 	Ref        string                                    `json:"$ref"`
 	Type       string                                    `json:"type"`
+	Format     string                                    `json:"format"`
 	Required   []string                                  `json:"required"`
 	Properties map[string]generatedSwaggerContractSchema `json:"properties"`
 	AllOf      []generatedSwaggerContractSchema          `json:"allOf"`
@@ -19,7 +21,8 @@ type generatedSwaggerContractSchema struct {
 
 type generatedSwaggerContractDocument struct {
 	Paths map[string]map[string]struct {
-		Responses map[string]struct {
+		Description string `json:"description"`
+		Responses   map[string]struct {
 			Schema generatedSwaggerContractSchema `json:"schema"`
 		} `json:"responses"`
 	} `json:"paths"`
@@ -75,6 +78,38 @@ func TestGeneratedSwaggerPublishesNodeUpdateEnvelopeAndDrillUnavailable(t *testi
 			t.Error("generated Swagger POST /policies/{id}/drill-trigger missing 503 response")
 		}
 	})
+}
+
+func TestGeneratedSwaggerPublishesNodeTimestampWrites(t *testing.T) {
+	var document generatedSwaggerContractDocument
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatalf("decode generated Swagger: %v", err)
+	}
+	schema, ok := document.Definitions["internal_api_handlers.nodeRequest"]
+	if !ok {
+		t.Fatal("generated Swagger missing nodeRequest")
+	}
+	for _, field := range []string{"maintenance_start", "maintenance_end", "expiry_date"} {
+		property, ok := schema.Properties[field]
+		if !ok || property.Type != "string" || !property.Nullable || property.Format != "" || slices.Contains(schema.Required, field) {
+			t.Errorf("%s must be an optional nullable string without a format constraint: %+v", field, property)
+		}
+	}
+	for _, operation := range []struct{ path, method string }{{"/nodes", "post"}, {"/nodes/{id}", "put"}} {
+		entry, ok := document.Paths[operation.path][operation.method]
+		if !ok {
+			t.Errorf("missing %s %s", operation.method, operation.path)
+			continue
+		}
+		for _, term := range []string{"maintenance_start", "maintenance_end", "expiry_date", "null", "空字符串", "RFC3339", "同时", "晚于", "微秒", "400"} {
+			if !strings.Contains(entry.Description, term) {
+				t.Errorf("%s %s description missing %q", operation.method, operation.path, term)
+			}
+		}
+		if _, ok := entry.Responses["400"]; !ok {
+			t.Errorf("%s %s missing 400 response", operation.method, operation.path)
+		}
+	}
 }
 
 func TestGeneratedSwaggerPublishesOverviewResponseCoverage(t *testing.T) {

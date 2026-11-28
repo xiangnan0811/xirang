@@ -148,6 +148,25 @@ function toInstantString(value: string): string {
   return parseDatetimeLocalValue(value)?.toISOString() ?? "";
 }
 
+// 微秒精度的时刻：ms 为整毫秒，micros 为毫秒内的 0–999 微秒（Date 只到毫秒）。
+type Instant = { ms: number; micros: number };
+
+const RFC3339_PARTS = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/;
+
+// 服务端存储值按原偏移解析并截断到微秒，与服务端的比较精度一致；非 RFC3339 旧值退回 Date 解析。
+function parseStoredInstant(raw: string): Instant | null {
+  const match = RFC3339_PARTS.exec(raw);
+  if (!match) {
+    const ms = new Date(raw).getTime();
+    return Number.isNaN(ms) ? null : { ms, micros: 0 };
+  }
+  const [, wholeSeconds, fraction = "", zone] = match;
+  const ms = Date.parse(`${wholeSeconds}${zone}`);
+  if (Number.isNaN(ms)) return null;
+  const digits = fraction.slice(0, 6).padEnd(6, "0");
+  return { ms: ms + Number(digits.slice(0, 3)), micros: Number(digits.slice(3)) };
+}
+
 function isSSHKeyExpired(key: SSHKeyRecord, nowMs: number): boolean {
   if (!key.expiresAt) return false;
   const expiry = parseDatetimeLocalValue(key.expiresAt) ?? new Date(key.expiresAt);
@@ -235,23 +254,29 @@ function validateDraft({ draft, baseline, editingNode }: EditorContext, t: TFunc
   }
 
   if (changed("maintenanceStart") || changed("maintenanceEnd")) {
-    const resolve = (key: "maintenanceStart" | "maintenanceEnd") => {
+    // 未改动的一端用存储原值（保留偏移、夏令时重复时刻与微秒），改动的一端按本地分钟解析。
+    const resolve = (key: "maintenanceStart" | "maintenanceEnd"): { present: boolean; instant: Instant | null } => {
       const value = draft[key];
       if (!value.trim()) return { present: false, instant: null };
       const stored = editingNode?.[key];
       if (!changed(key) && stored) {
-        const original = new Date(stored);
-        if (!Number.isNaN(original.getTime())) return { present: true, instant: original };
+        const original = parseStoredInstant(stored);
+        if (original) return { present: true, instant: original };
       }
-      const instant = parseDatetimeLocalValue(value);
-      if (!instant) errors[key] = t("nodeEditor.validation.datetimeInvalid");
-      return { present: true, instant };
+      const parsed = parseDatetimeLocalValue(value);
+      if (!parsed) errors[key] = t("nodeEditor.validation.datetimeInvalid");
+      return { present: true, instant: parsed && { ms: parsed.getTime(), micros: 0 } };
     };
     const start = resolve("maintenanceStart");
     const end = resolve("maintenanceEnd");
     if (start.present !== end.present) {
       errors[start.present ? "maintenanceEnd" : "maintenanceStart"] = t("nodeEditor.validation.maintenancePairRequired");
-    } else if (start.instant && end.instant && end.instant.getTime() <= start.instant.getTime()) {
+    } else if (
+      start.instant &&
+      end.instant &&
+      (end.instant.ms < start.instant.ms ||
+        (end.instant.ms === start.instant.ms && end.instant.micros <= start.instant.micros))
+    ) {
       errors.maintenanceEnd = t("nodeEditor.validation.maintenanceEndAfterStart");
     }
   }

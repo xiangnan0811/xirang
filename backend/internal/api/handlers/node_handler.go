@@ -58,9 +58,9 @@ type nodeRequest struct {
 	Status           string  `json:"status"`
 	BasePath         string  `json:"base_path"`
 	BackupDir        string  `json:"backup_dir"`
-	MaintenanceStart *string `json:"maintenance_start"`
-	MaintenanceEnd   *string `json:"maintenance_end"`
-	ExpiryDate       *string `json:"expiry_date"`
+	MaintenanceStart *string `json:"maintenance_start" extensions:"x-nullable"`
+	MaintenanceEnd   *string `json:"maintenance_end" extensions:"x-nullable"`
+	ExpiryDate       *string `json:"expiry_date" extensions:"x-nullable"`
 	Archived         *bool   `json:"archived"`
 	UseSudo          *bool   `json:"use_sudo"`
 }
@@ -142,7 +142,7 @@ func (h *NodeHandler) Get(c *gin.Context) {
 
 // Create godoc
 // @Summary      创建节点
-// @Description  添加新的服务器节点
+// @Description  添加新的服务器节点。maintenance_start、maintenance_end 和 expiry_date 可省略或为 null；空字符串表示清除，其他值必须是 RFC3339。维护时间必须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。expiry_date 可早于当前时间。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -188,7 +188,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 
 // Update godoc
 // @Summary      更新节点
-// @Description  更新节点配置信息
+// @Description  更新节点配置信息。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json

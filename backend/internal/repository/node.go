@@ -20,7 +20,7 @@ type NodeRepository interface {
 	FindByHost(ctx context.Context, host string) (*model.Node, error)
 	List(ctx context.Context) ([]model.Node, error)
 	Create(ctx context.Context, node *model.Node) error
-	Update(ctx context.Context, node *model.Node, updateStatus bool) error
+	Update(ctx context.Context, node *model.Node, updateStatus bool, applyTimes func(*model.Node) error) error
 	Delete(ctx context.Context, id uint) error
 	ExistsByID(ctx context.Context, id uint) (bool, error)
 

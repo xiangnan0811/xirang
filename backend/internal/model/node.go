@@ -8,17 +8,33 @@ import (
 	"gorm.io/gorm"
 )
 
-// Sanitized 返回去除敏感字段（密码、私钥）的节点副本，用于 API 响应。
+// Sanitized 返回去除敏感字段并规范调度时间的节点副本，用于 API 响应。
 func (n Node) Sanitized() Node {
 	safe := n
 	safe.Password = ""
 	safe.PrivateKey = ""
+	safe.MaintenanceStart = nodeTimeForResponse(n.MaintenanceStart)
+	safe.MaintenanceEnd = nodeTimeForResponse(n.MaintenanceEnd)
+	safe.ExpiryDate = nodeTimeForResponse(n.ExpiryDate)
 	if safe.SSHKey != nil {
 		keyCopy := *safe.SSHKey
 		keyCopy.PrivateKey = ""
 		safe.SSHKey = &keyCopy
 	}
 	return safe
+}
+
+// Keep legacy offsets when converting to UTC would make the year unencodable
+// by time.Time's JSON marshaler. Never mutate the stored timestamp.
+func nodeTimeForResponse(value *time.Time) *time.Time {
+	if value == nil || value.Location() == time.UTC {
+		return value
+	}
+	utc := value.UTC()
+	if utc.Year() < 0 || utc.Year() > 9999 {
+		return value
+	}
+	return &utc
 }
 
 type Node struct {

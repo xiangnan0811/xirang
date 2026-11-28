@@ -322,6 +322,81 @@ describe("NodeEditorDialog", () => {
     expect(screen.getByLabelText("维护窗口结束")).toHaveFocus();
   });
 
+  it("accepts an edited start just before a stored end that is only microseconds later", async () => {
+    process.env.TZ = "UTC";
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({
+      editingNode: makeNode({
+        maintenanceStart: "2026-07-01T08:00:00Z",
+        // = 10:00:00.000001Z：与编辑后的开始时间毫秒相同，仅晚 1 微秒，服务端视为晚于开始。
+        maintenanceEnd: "2026-07-01T12:00:00.000001+02:00",
+      }),
+    });
+    const end = screen.getByLabelText("维护窗口结束");
+    expect(end).toHaveValue("2026-07-01T10:00");
+
+    fireEvent.change(screen.getByLabelText("维护窗口开始"), { target: { value: "2026-07-01T10:00" } });
+    await user.click(submitButton());
+
+    expect(end).toHaveAttribute("aria-invalid", "false");
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].maintenanceStart).toBe("2026-07-01T10:00:00.000Z");
+    expect(onSave.mock.calls[0][0].maintenanceEnd).toBeUndefined();
+  });
+
+  it.each([
+    {
+      scenario: "a stored start 1µs after the edited end",
+      node: { maintenanceStart: "2026-07-01T10:00:00.000001Z", maintenanceEnd: "2026-07-01T12:00:00Z" },
+      edited: "维护窗口结束",
+    },
+    {
+      scenario: "a stored end equal to the edited start after microsecond truncation",
+      node: { maintenanceStart: "2026-07-01T08:00:00Z", maintenanceEnd: "2026-07-01T10:00:00.000000999Z" },
+      edited: "维护窗口开始",
+    },
+  ])("rejects an edited endpoint against $scenario", async ({ node, edited }) => {
+    process.env.TZ = "UTC";
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode(node) });
+
+    fireEvent.change(screen.getByLabelText(edited), { target: { value: "2026-07-01T10:00" } });
+    await user.click(submitButton());
+
+    expect(onSave).not.toHaveBeenCalled();
+    const end = screen.getByLabelText("维护窗口结束");
+    expect(end).toHaveAttribute("aria-invalid", "true");
+    expect(end).toHaveAccessibleDescription(/结束时间必须晚于开始时间。/);
+  });
+
+  it("checks an edited end against the untouched legacy start's exact stored instant", async () => {
+    process.env.TZ = "America/New_York";
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({
+      editingNode: makeNode({
+        // 夏令时回拨夜第二个 01:30（EST）：非 UTC 偏移且带微秒，本地分钟值无法区分重复时刻。
+        maintenanceStart: "2026-11-01T01:30:00.000001-05:00",
+        maintenanceEnd: "2026-11-01T03:00:00-05:00",
+      }),
+    });
+    const start = screen.getByLabelText("维护窗口开始");
+    const end = screen.getByLabelText("维护窗口结束");
+    expect(start).toHaveValue("2026-11-01T01:30");
+
+    // 01:45 按较早偏移（EDT）解析为 05:45Z，早于存储的 06:30:00.000001Z。
+    fireEvent.change(end, { target: { value: "2026-11-01T01:45" } });
+    await user.click(submitButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(end).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(end, { target: { value: "2026-11-01T02:00" } });
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].maintenanceStart).toBeUndefined();
+    expect(onSave.mock.calls[0][0].maintenanceEnd).toBe("2026-11-01T07:00:00.000Z");
+  });
+
   it("requires a password only when switching to password auth", async () => {
     const user = userEvent.setup();
     const { onSave } = renderEditor({ editingNode: makeNode() });
