@@ -129,6 +129,12 @@ function hasReservedPathChars(value: string): boolean {
   return value.includes("/") || value.includes("\\") || value.includes("..") || value.includes("\0");
 }
 
+// 与服务端 strings.TrimSpace 的判定一致（Unicode White_Space：含 NEL、不含 BOM，不同于 String#trim）。
+// 空白即“未填写”：新建按节点名称生成，编辑保留原标识；非空值原样保存。
+function isBlankBackupDir(value: string): boolean {
+  return /^\p{White_Space}*$/u.test(value);
+}
+
 function parsePort(raw: string): number | null {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) return null;
@@ -211,12 +217,20 @@ function validateDraft({ draft, baseline, editingNode }: EditorContext, t: TFunc
     }
   }
 
-  const backupDir = draft.backupDir.trim();
-  if (backupDir) {
-    if (changed("backupDir") && (new TextEncoder().encode(backupDir).length > 128 || hasReservedPathChars(backupDir))) {
+  // 非空值按原样存储，校验也针对原值（与服务端一致按字节计长度）。
+  if (!isBlankBackupDir(draft.backupDir)) {
+    if (
+      changed("backupDir") &&
+      (new TextEncoder().encode(draft.backupDir).length > 128 || hasReservedPathChars(draft.backupDir))
+    ) {
       errors.backupDir = t("nodeEditor.validation.backupDirInvalid");
     }
-  } else if (isEditing ? baseline.backupDir.trim() === "" : sanitizeForBackupDir(draft.name) === "") {
+  } else if (isEditing) {
+    // 留空即保留原值；只有原值本身为空（而非仅含空白的旧标识）时才无可保留。
+    if (baseline.backupDir === "") {
+      errors.backupDir = t("nodeEditor.validation.backupDirMissing");
+    }
+  } else if (sanitizeForBackupDir(draft.name) === "") {
     errors.backupDir = t("nodeEditor.validation.backupDirRequired");
   }
 
@@ -384,11 +398,6 @@ export function NodeEditorDialog({
   const context: EditorContext = { draft, baseline, editingNode: editingNode ?? null };
   const isEditing = Boolean(draft.id);
 
-  // 编辑已有节点时，backupDir 已存在，视为手动编辑过
-  // useDialogDraft 在 editingNode 变化时会重建 draft，此处同步重置标记
-  if (editingNodeId && !backupDirManuallyEdited && draft.id === editingNodeId && draft.backupDir) {
-    setBackupDirManuallyEdited(true);
-  }
   // 对话框关闭后重置标记
   if (!open && backupDirManuallyEdited) {
     setBackupDirManuallyEdited(false);
@@ -427,6 +436,14 @@ export function NodeEditorDialog({
       : draft.basePath === "" && baseline.basePath !== ""
         ? t("nodeEditor.basePathBlankKeeps", { path: baseline.basePath })
         : null;
+
+  // 空白输入会保留原标识，只有明确填写不同的值才提示。
+  const backupDirChanged =
+    isEditing &&
+    !isBlankBackupDir(draft.backupDir) &&
+    draft.backupDir !== baseline.backupDir;
+  // eslint-disable-next-line no-control-regex -- intentional: detect non-ASCII chars in node name
+  const showBackupDirNonAsciiWarning = !isEditing && !backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name);
 
   const updateDraft = (patch: Partial<NodeEditorDraft>, ...clear: FieldKey[]) => {
     setDraft((prev) => ({ ...prev, ...patch }));
@@ -569,7 +586,7 @@ export function NodeEditorDialog({
             aria-describedby={describedBy(fieldErrors.name && "node-edit-name-error")}
             onChange={(event) => {
               const newName = event.target.value;
-              if (!backupDirManuallyEdited) {
+              if (!isEditing && !backupDirManuallyEdited) {
                 updateDraft({ name: newName, backupDir: sanitizeForBackupDir(newName) }, "name", "backupDir");
               } else {
                 updateDraft({ name: newName }, "name");
@@ -777,7 +794,12 @@ export function NodeEditorDialog({
             placeholder={t('nodeEditor.backupDirPlaceholder')}
             value={draft.backupDir}
             aria-invalid={Boolean(fieldErrors.backupDir)}
-            aria-describedby={describedBy(fieldErrors.backupDir && "node-edit-backup-dir-error", "node-edit-backup-dir-hint")}
+            aria-describedby={describedBy(
+              fieldErrors.backupDir && "node-edit-backup-dir-error",
+              "node-edit-backup-dir-hint",
+              backupDirChanged && "node-edit-backup-dir-warning",
+              showBackupDirNonAsciiWarning && "node-edit-backup-dir-name-warning",
+            )}
             onChange={(event) => {
               setBackupDirManuallyEdited(true);
               updateDraft({ backupDir: event.target.value }, "backupDir");
@@ -785,21 +807,21 @@ export function NodeEditorDialog({
           />
           <FieldError id="node-edit-backup-dir-error" message={fieldErrors.backupDir} />
           <p id="node-edit-backup-dir-hint" className={hintClass}>
-            {t('nodeEditor.backupDirHint')}
+            {t(
+              !isEditing
+                ? 'nodeEditor.backupDirHintCreate'
+                : baseline.backupDir === ""
+                  ? 'nodeEditor.backupDirHintMissing'
+                  : 'nodeEditor.backupDirHintEdit',
+            )}
           </p>
-          {draft.backupDir && (
-            <p className="mt-0.5 break-all text-xs text-muted-foreground">
-              {t('nodeEditor.backupDirPreview', { dir: draft.backupDir })}
-            </p>
-          )}
-          {isEditing && draft.backupDir && draft.backupDir !== baseline.backupDir && (
-            <p className={warningClass}>
+          {backupDirChanged && (
+            <p id="node-edit-backup-dir-warning" className={warningClass}>
               {t('nodeEditor.backupDirChangeWarning')}
             </p>
           )}
-          {/* eslint-disable-next-line no-control-regex -- intentional: detect non-ASCII chars in node name */}
-          {!backupDirManuallyEdited && /[^\x00-\x7F]/.test(draft.name) && (
-            <p className={warningClass}>
+          {showBackupDirNonAsciiWarning && (
+            <p id="node-edit-backup-dir-name-warning" className={warningClass}>
               {t('nodeEditor.backupDirNonAsciiWarning')}
             </p>
           )}

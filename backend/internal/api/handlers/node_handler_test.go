@@ -438,61 +438,157 @@ func TestParseDiskProbeAcceptsFullUsage(t *testing.T) {
 }
 
 func TestNodeUpdateResponseUsesNestedNodeAndOptionalWarning(t *testing.T) {
-	db := openNodeHandlerTestDB(t)
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_NODE_UPDATE_DATA_KEY_32_BYTES")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
-		t.Fatalf("初始化节点更新测试表失败: %v", err)
-	}
 
-	node := model.Node{
-		Name:      "node-update-before",
-		Host:      "10.0.0.31",
-		Port:      22,
-		Username:  "root",
-		AuthType:  "password",
-		Password:  "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY",
-		BackupDir: "node-update-before",
-		Status:    "offline",
+	const password = "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY"
+	const warning = "备份目录标识已更改，已有备份数据不会自动迁移"
+	stringPtr := func(value string) *string { return &value }
+	tests := []struct {
+		name       string
+		oldDir     string
+		requestDir *string
+		wantDir    string
+		wantWarn   bool
+	}{
+		{name: "omitted", oldDir: "original", wantDir: "original"},
+		{name: "empty", oldDir: "original", requestDir: stringPtr(""), wantDir: "original"},
+		{name: "whitespace only", oldDir: "original", requestDir: stringPtr(" \t\u3000"), wantDir: "original"},
+		{name: "same identifier", oldDir: "original", requestDir: stringPtr("original"), wantDir: "original"},
+		{name: "same identifier with whitespace", oldDir: " original ", requestDir: stringPtr(" original "), wantDir: " original "},
+		{name: "changed identifier", oldDir: "original", requestDir: stringPtr("updated"), wantDir: "updated", wantWarn: true},
+		{name: "added whitespace", oldDir: "original", requestDir: stringPtr(" original "), wantDir: " original ", wantWarn: true},
+		{name: "removed whitespace", oldDir: " original ", requestDir: stringPtr("original"), wantDir: "original", wantWarn: true},
+		{name: "legacy empty identifier", oldDir: "", requestDir: stringPtr("updated"), wantDir: "updated", wantWarn: true},
 	}
-	if err := db.Create(&node).Error; err != nil {
-		t.Fatalf("创建节点失败: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openNodeHandlerTestDB(t)
+			if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
+				t.Fatalf("初始化节点更新测试表失败: %v", err)
+			}
+			node := model.Node{
+				Name: "node-update-before", Host: "10.0.0.31", Port: 22,
+				Username: "root", AuthType: "password", Password: password,
+				BackupDir: tt.oldDir, Status: "offline",
+			}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatalf("创建节点失败: %v", err)
+			}
 
-	router := gin.New()
-	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
-	router.PUT("/nodes/:id", handler.Update)
-	body := `{"name":"node-update-after","host":"10.0.0.32","port":22,"username":"root","auth_type":"password","password":"FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY","backup_dir":"node-update-after"}`
-	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/nodes/%d", node.ID), bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, req)
+			router := gin.New()
+			handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
+			router.PUT("/nodes/:id", handler.Update)
+			body := map[string]interface{}{
+				"name": "node-update-after", "host": "10.0.0.32", "port": 22,
+				"username": "root", "auth_type": "password", "password": password,
+			}
+			if tt.requestDir != nil {
+				body["backup_dir"] = *tt.requestDir
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("编码节点更新请求失败: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/nodes/%d", node.ID), bytes.NewReader(encoded))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("节点更新期望 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+			}
 
-	if resp.Code != http.StatusOK {
-		t.Fatalf("节点更新期望 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+			var envelope struct {
+				Code int                        `json:"code"`
+				Data map[string]json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("解析节点更新响应失败: %v", err)
+			}
+			if envelope.Code != http.StatusOK {
+				t.Fatalf("节点更新响应 code 不符合预期: %d", envelope.Code)
+			}
+			var updated model.Node
+			if err := json.Unmarshal(envelope.Data["node"], &updated); err != nil {
+				t.Fatalf("解析响应 data.node 失败: %v", err)
+			}
+			if updated.ID != node.ID || updated.Name != "node-update-after" || updated.BackupDir != tt.wantDir {
+				t.Fatalf("响应 data.node 未包含更新后的节点: %+v", updated)
+			}
+			gotWarning, exists := envelope.Data["warning"]
+			if tt.wantWarn {
+				var got string
+				if !exists || json.Unmarshal(gotWarning, &got) != nil || got != warning {
+					t.Fatalf("响应 warning 不符合预期，want=%q got=%s", warning, gotWarning)
+				}
+			} else if exists {
+				t.Fatalf("响应不应包含 warning，got=%s", gotWarning)
+			}
+			if strings.Contains(resp.Body.String(), password) || updated.Password != "" || updated.PrivateKey != "" {
+				t.Fatalf("节点更新响应泄漏敏感凭据: %s", resp.Body.String())
+			}
+		})
 	}
-	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			Node    model.Node `json:"node"`
-			Warning string     `json:"warning"`
-		} `json:"data"`
+}
+
+func TestNodeUpdateRejectsBlankBackupDirForLegacyEmptyIdentifier(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_NODE_UPDATE_DATA_KEY_32_BYTES")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	tests := []struct {
+		name      string
+		include   bool
+		backupDir string
+	}{
+		{name: "omitted"},
+		{name: "empty", include: true},
+		{name: "whitespace only", include: true, backupDir: " \t\u3000"},
 	}
-	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("解析节点更新响应失败: %v", err)
-	}
-	if envelope.Code != http.StatusOK {
-		t.Fatalf("节点更新响应 code 不符合预期: %+v", envelope)
-	}
-	if envelope.Data.Node.ID != node.ID || envelope.Data.Node.Name != "node-update-after" || envelope.Data.Node.BackupDir != "node-update-after" {
-		t.Fatalf("响应 data.node 未包含更新后的节点: %+v", envelope.Data.Node)
-	}
-	wantWarning := "备份目录标识已更改，旧路径 /backup/node-update-before 下的数据不会自动迁移"
-	if envelope.Data.Warning != wantWarning {
-		t.Fatalf("响应 warning 不符合预期，want=%q got=%q", wantWarning, envelope.Data.Warning)
-	}
-	if strings.Contains(resp.Body.String(), "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY") {
-		t.Fatalf("节点更新响应泄漏敏感密码: %s", resp.Body.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openNodeHandlerTestDB(t)
+			if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
+				t.Fatalf("初始化节点更新测试表失败: %v", err)
+			}
+			node := model.Node{
+				Name: "node-update-before", Host: "10.0.0.31", Port: 22,
+				Username: "root", AuthType: "password", Password: "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY",
+				BackupDir: "", Status: "offline",
+			}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatalf("创建节点失败: %v", err)
+			}
+
+			router := gin.New()
+			handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
+			router.PUT("/nodes/:id", handler.Update)
+			body := map[string]interface{}{
+				"name": "node-update-after", "host": "10.0.0.32", "port": 22,
+				"username": "root", "auth_type": "password",
+			}
+			if tt.include {
+				body["backup_dir"] = tt.backupDir
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("编码节点更新请求失败: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/nodes/%d", node.ID), bytes.NewReader(encoded))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("节点更新期望 400，实际 status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			var stored model.Node
+			if err := db.First(&stored, node.ID).Error; err != nil {
+				t.Fatalf("查询节点失败: %v", err)
+			}
+			if stored.BackupDir != "" {
+				t.Fatalf("节点的备份目录标识应保持为空，实际 %q", stored.BackupDir)
+			}
+		})
 	}
 }

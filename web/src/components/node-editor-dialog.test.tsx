@@ -96,6 +96,10 @@ describe("NodeEditorDialog", () => {
     await user.type(screen.getByLabelText("节点名称"), "edge-01");
     await user.type(screen.getByLabelText("主机地址"), "10.0.0.8");
     await user.selectOptions(screen.getByLabelText("SSH 密钥"), "key-1");
+    const backupDir = screen.getByLabelText("备份目录标识");
+    expect(backupDir).toHaveValue("edge-01");
+    expect(backupDir).toHaveAccessibleDescription("留空时根据节点名称自动生成。备份数据的实际存放位置以各任务配置为准。");
+    expect(screen.queryByText(/\/backup\//)).not.toBeInTheDocument();
     await user.click(submitButton());
 
     expect(onSave).toHaveBeenCalledTimes(1);
@@ -146,6 +150,97 @@ describe("NodeEditorDialog", () => {
     expect(input.maintenanceStart).toBeUndefined();
     expect(input.maintenanceEnd).toBeUndefined();
     expect(input.expiryDate).toBeUndefined();
+  });
+
+  it("treats a Go-blank backup ID as keeping the stored one, without a migration notice", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+    const field = screen.getByLabelText("备份目录标识");
+    const editHint = "留空则保留当前标识。备份数据的实际存放位置以各任务配置为准。";
+
+    expect(field).toHaveAccessibleDescription(editHint);
+    expect(screen.queryByText(/\/backup\//)).not.toBeInTheDocument();
+
+    // NEL 属于 Go 的 Unicode 空白（String#trim 不认），服务端会保留原标识。
+    fireEvent.change(field, { target: { value: " \u0085\t" } });
+    expect(field).toHaveAccessibleDescription(editHint);
+    expect(screen.queryByText("修改此标识不会自动迁移已有备份数据。")).not.toBeInTheDocument();
+
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].backupDir).toBe(" \u0085\t");
+  });
+
+  it("warns before saving a backup ID that differs exactly from the stored one and sends it raw", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+    const field = screen.getByLabelText("备份目录标识");
+    const notice = "修改此标识不会自动迁移已有备份数据。";
+
+    fireEvent.change(field, { target: { value: "prod-node-2" } });
+    expect(field).toHaveAccessibleDescription(/修改此标识不会自动迁移已有备份数据。$/);
+
+    fireEvent.change(field, { target: { value: "prod-node-1" } });
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
+
+    // BOM 不是 Go 空白（String#trim 会去掉它），保存后成为新的标识。
+    fireEvent.change(field, { target: { value: "\uFEFF" } });
+    expect(screen.getByText(notice)).toBeInTheDocument();
+
+    // 服务端按原始字节计长度，首尾空白不会被裁掉。
+    fireEvent.change(field, { target: { value: `${"a".repeat(128)} ` } });
+    await user.click(submitButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(field, { target: { value: "prod-node-1 " } });
+    expect(field).toHaveAccessibleDescription(/修改此标识不会自动迁移已有备份数据。$/);
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].backupDir).toBe("prod-node-1 ");
+  });
+
+  it("requires an explicit backup ID when the edited node has none stored", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode({ backupDir: "" }) });
+    const field = screen.getByLabelText("备份目录标识");
+    const missingHint = "此节点尚未设置备份目录标识，请填写。备份数据的实际存放位置以各任务配置为准。";
+
+    expect(field).toHaveAccessibleDescription(missingHint);
+    await user.type(screen.getByLabelText("节点名称"), "-已重命名");
+    expect(field).toHaveValue("");
+    expect(screen.queryByText(/自动生成的备份目录标识/)).not.toBeInTheDocument();
+
+    await user.click(submitButton());
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveFocus();
+    expect(field).toHaveAccessibleDescription(`请填写备份目录标识，此节点当前没有可保留的标识。 ${missingHint}`);
+
+    await user.type(field, "edge-legacy");
+    expect(field).toHaveAttribute("aria-invalid", "false");
+    expect(field).toHaveAccessibleDescription(`${missingHint} 修改此标识不会自动迁移已有备份数据。`);
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].backupDir).toBe("edge-legacy");
+  });
+
+  it("keeps a stored whitespace-only legacy backup ID on an unrelated edit", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode({ backupDir: "  " }) });
+    const field = screen.getByLabelText("备份目录标识");
+
+    expect(field).toHaveAccessibleDescription("留空则保留当前标识。备份数据的实际存放位置以各任务配置为准。");
+
+    await user.type(screen.getByLabelText("节点名称"), "-renamed");
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].backupDir).toBe("  ");
   });
 
   it("falls back to joined tags when the raw string no longer matches the parsed tags", () => {

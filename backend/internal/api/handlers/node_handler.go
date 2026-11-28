@@ -236,8 +236,8 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 
 	resp := nodeUpdateResponse{Node: nodeObj.Sanitized()}
-	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
-		resp.Warning = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
+	if strings.TrimSpace(req.BackupDir) != "" && oldBackupDir != nodeObj.BackupDir {
+		resp.Warning = "备份目录标识已更改，已有备份数据不会自动迁移"
 	}
 	respondOK(c, resp)
 }

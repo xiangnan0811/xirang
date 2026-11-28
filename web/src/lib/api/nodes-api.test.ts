@@ -98,7 +98,7 @@ describe("nodes api", () => {
             status: "online",
             backup_dir: "db-1",
           },
-          warning: "备份目录标识已更改，旧路径 /backup/old 下的数据不会自动迁移",
+          warning: "备份目录标识已更改，已有备份数据不会自动迁移",
         },
       }))
     );
@@ -121,7 +121,7 @@ describe("nodes api", () => {
       status: "online",
       backupDir: "db-1",
     });
-    expect(result.warning).toContain("备份目录标识已更改");
+    expect(result.warning).toBe("备份目录标识已更改，已有备份数据不会自动迁移");
 
     const wrapperMappedAsNode = __test__.mapNode({
       node: { id: 7, name: "db-1", host: "10.0.0.7" },
