@@ -8,6 +8,8 @@
 
 公开 HTTP 端口映射 `10761:10761`。TLS 由外部反向代理/负载均衡器管理，镜像不提供证书挂载、HTTPS 监听或内置重定向。容器后端 `SERVER_ADDR=:3000`，Nginx 上游 `127.0.0.1:3000`；源码运行的默认值为 `:8080`，不承诺仅绑定回环地址。
 
+官方 Nginx 直接提供 `/assets/` 下的打包资源，文件缺失时返回 404。前端页面路由继续使用 `index.html` 回退。
+
 Compose 必须有 `.env`；部署从 `.env.deploy` 复制并填写。生产秘密为空由配置/初始化验证拒绝，首次管理员密码只在数据库尚无 admin 时需要。具体必填值、优先级和生效条件引用环境变量主文。
 
 手动部署工作流的 checkout 引用遵循[Actions commit pin 规则](../../maintainers/automation.md#actions-与-ci)。

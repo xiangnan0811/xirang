@@ -15,10 +15,8 @@ import { createConfigApi } from "./config-api";
 import { createSystemApi } from "./system-api";
 import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
-import { createSettingsApi } from "./settings-api";
 import { createSilencesApi } from "./silences";
 import { createAnomalyApi } from "./anomaly";
-import { createEscalationApi } from "./escalation";
 import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 
@@ -371,11 +369,9 @@ export const apiClient = {
   ...createSystemApi(),
   ...createDockerApi(),
   ...createStorageGuideApi(),
-  ...createSettingsApi(),
   ...createSilencesApi(),
   ...lazySLOApi,
   ...createAnomalyApi(),
-  ...createEscalationApi(),
   ...createAlertDeliveriesApi(),
   ...createAppCredentialsApi(),
   ...lazyRecoveryPointsApi,

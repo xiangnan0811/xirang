@@ -11,10 +11,13 @@ import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
+import { createEscalationApi } from "@/lib/api/escalation";
 import { getAuthSessionGeneration } from "@/lib/api/core";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AppCredential, ProfileSchema } from "@/lib/api/credentials";
 import type { EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
+
+const escalationApi = createEscalationApi();
 
 type PolicyDraft = NewPolicyInput & {
   id?: number;
@@ -139,7 +142,7 @@ export function PolicyEditorDialog({
     const { signal } = controller;
     const generation = getAuthSessionGeneration();
     const isCurrent = () => !signal.aborted && generation === getAuthSessionGeneration();
-    apiClient.listEscalationPolicies(token, { signal })
+    escalationApi.listEscalationPolicies(token, { signal })
       .then((list) => {
         if (isCurrent()) setEscalationPolicies(list.filter((p) => p.enabled));
       })

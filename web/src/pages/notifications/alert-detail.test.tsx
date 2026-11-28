@@ -3,21 +3,16 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { AlertEscalationTimeline } from "./alert-detail";
 
-vi.mock("@/lib/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
-  return {
-    ...actual,
-    apiClient: {
-      ...actual.apiClient,
-      listAlertEscalationEvents: vi.fn(),
-      listEscalationPolicies: vi.fn().mockResolvedValue([]),
-    },
-  };
-});
+const escalationApiMock = vi.hoisted(() => ({
+  listAlertEscalationEvents: vi.fn(),
+  listEscalationPolicies: vi.fn().mockResolvedValue([]),
+}));
 
-import { apiClient } from "@/lib/api/client";
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => escalationApiMock,
+}));
 
-const mockListEvents = apiClient.listAlertEscalationEvents as ReturnType<typeof vi.fn>;
+const mockListEvents = escalationApiMock.listAlertEscalationEvents;
 
 const baseEvent = {
   id: 1,

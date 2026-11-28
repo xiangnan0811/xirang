@@ -158,10 +158,8 @@ vi.mock("@/lib/api/client", () => ({
     // tests; individual tests can override via mockResolvedValueOnce.
     getAlertGroupInfo: vi.fn().mockResolvedValue({ count: 1, siblingNodeIds: [] }),
     retryDelivery: mockRetryDelivery,
-    // Used by AlertEscalationTimeline / AnomalyAlertContext rendered inside
-    // alert detail; default to empty so nothing renders by default.
-    listEscalationPolicies: vi.fn().mockResolvedValue([]),
-    listAlertEscalationEvents: vi.fn().mockResolvedValue([]),
+    // Used by AnomalyAlertContext rendered inside alert detail; default to
+    // empty so nothing renders by default.
     listAnomalyEvents: vi.fn().mockResolvedValue({ data: [], total: 0 }),
   },
   ApiError: class ApiError extends Error {
@@ -171,6 +169,15 @@ vi.mock("@/lib/api/client", () => ({
       this.status = status;
     }
   },
+}));
+
+// Used by AlertEscalationTimeline rendered inside alert detail; default to
+// empty so nothing renders by default.
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => ({
+    listEscalationPolicies: vi.fn().mockResolvedValue([]),
+    listAlertEscalationEvents: vi.fn().mockResolvedValue([]),
+  }),
 }));
 
 /* ---------- default mock return values ---------- */

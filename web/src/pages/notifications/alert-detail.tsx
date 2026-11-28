@@ -3,7 +3,10 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiClient } from "@/lib/api/client";
+import { createEscalationApi } from "@/lib/api/escalation";
 import type { AnomalyDetector, AnomalyEvent, EscalationEvent, EscalationPolicy } from "@/types/domain";
+
+const escalationApi = createEscalationApi();
 
 type AlertEscalationTimelineProps = {
   token: string;
@@ -70,7 +73,7 @@ export function AlertEscalationTimeline({
   // Load policies once to resolve integration names via policy levels
   useEffect(() => {
     let cancelled = false;
-    apiClient.listEscalationPolicies(token).then(
+    escalationApi.listEscalationPolicies(token).then(
       (list) => { if (!cancelled) setPolicies(list); },
       () => {},
     );
@@ -79,7 +82,7 @@ export function AlertEscalationTimeline({
 
   useEffect(() => {
     let cancelled = false;
-    apiClient.listAlertEscalationEvents(token, alertId).then(
+    escalationApi.listAlertEscalationEvents(token, alertId).then(
       (evs) => {
         if (!cancelled) {
           setEvents(evs);

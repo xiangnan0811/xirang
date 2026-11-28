@@ -27,10 +27,12 @@ const apiFixture = vi.hoisted(() => {
   return {
     apiClient: {
       [deprecatedMethod]: mocks.deprecatedHookTemplates,
-      listEscalationPolicies: mocks.listEscalationPolicies,
       getProfiles: mocks.getProfiles,
       getCredentials: mocks.getCredentials,
       triggerDrill: mocks.triggerDrill,
+    },
+    escalationApi: {
+      listEscalationPolicies: mocks.listEscalationPolicies,
     },
     mocks,
   };
@@ -97,6 +99,10 @@ vi.mock("@/context/auth-context.hooks", () => ({
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: apiFixture.apiClient,
+}));
+
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => apiFixture.escalationApi,
 }));
 
 vi.mock("@/components/ui/toast-sonner", () => ({

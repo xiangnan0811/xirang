@@ -9,6 +9,18 @@ const PRE_CACHE = [
 
 const STATIC_DESTINATIONS = new Set(["style", "script", "image", "font"]);
 
+// JavaScript MIME essences (WHATWG MIME Sniffing) that Nginx's mime.types maps
+// for .js/.mjs across versions. With X-Content-Type-Options: nosniff the
+// browser rejects any other script type, so such a response (for example the
+// SPA index.html fallback) must never be cached or replayed for a script.
+const SCRIPT_MIME_TYPES = new Set([
+  "text/javascript",
+  "application/javascript",
+  "application/x-javascript",
+  "application/ecmascript",
+  "text/ecmascript"
+]);
+
 function shouldBypassCache(requestUrl, request) {
   if (requestUrl.origin !== self.location.origin) {
     return true;
@@ -28,6 +40,25 @@ function shouldBypassCache(requestUrl, request) {
 
 function shouldCacheResponse(response) {
   return Boolean(response && response.ok && response.type === "basic");
+}
+
+function isScriptResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  return SCRIPT_MIME_TYPES.has(contentType.split(";")[0].trim().toLowerCase());
+}
+
+function isUsableStaticResponse(request, response) {
+  return request.destination !== "script" || isScriptResponse(response);
+}
+
+function fetchStatic(request) {
+  return fetch(request).then((response) => {
+    if (shouldCacheResponse(response) && isUsableStaticResponse(request, response)) {
+      const cloned = response.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(request, cloned));
+    }
+    return response;
+  });
 }
 
 self.addEventListener("install", (event) => {
@@ -82,16 +113,20 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => {
-      if (cached) {
+      if (!cached) {
+        return fetchStatic(request);
+      }
+      if (isUsableStaticResponse(request, cached)) {
         return cached;
       }
-      return fetch(request).then((response) => {
-        if (shouldCacheResponse(response)) {
-          const cloned = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, cloned));
-        }
-        return response;
-      });
+      // A legacy entry (e.g. HTML cached before MIME validation) must not keep
+      // winning: evict it before refetching so a valid response replaces it and
+      // an invalid one leaves no entry behind.
+      return caches
+        .open(CACHE_NAME)
+        .then((cache) => cache.delete(request))
+        .catch(() => undefined)
+        .then(() => fetchStatic(request));
     })
   );
 });
