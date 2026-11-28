@@ -31,7 +31,6 @@ type dockerSSHTestServer struct {
 	password string
 	hostKey  ssh.PublicKey
 	listener net.Listener
-	config   *ssh.ServerConfig
 	behavior func(command string, channel ssh.Channel, connectionDone <-chan struct{})
 
 	authAttempts     atomic.Int32
@@ -43,7 +42,7 @@ type dockerSSHTestServer struct {
 	workers          sync.WaitGroup
 }
 
-func startDockerSSHTestServer(t *testing.T, behavior func(string, ssh.Channel, <-chan struct{})) *dockerSSHTestServer {
+func startDockerSSHTestServer(t *testing.T, behavior func(string, ssh.Channel, <-chan struct{}), configure ...func(*ssh.ServerConfig)) *dockerSSHTestServer {
 	t.Helper()
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
@@ -81,16 +80,18 @@ func startDockerSSHTestServer(t *testing.T, behavior func(string, ssh.Channel, <
 		},
 	}
 	config.AddHostKey(hostSigner)
-	server.config = config
+	for _, initialize := range configure {
+		initialize(config)
+	}
 	server.workers.Add(1)
-	go server.acceptLoop()
+	go server.acceptLoop(config)
 	t.Cleanup(func() {
 		server.close(t)
 	})
 	return server
 }
 
-func (server *dockerSSHTestServer) acceptLoop() {
+func (server *dockerSSHTestServer) acceptLoop(config *ssh.ServerConfig) {
 	defer server.workers.Done()
 	for {
 		rawConn, err := server.listener.Accept()
@@ -108,13 +109,13 @@ func (server *dockerSSHTestServer) acceptLoop() {
 				delete(server.connections, rawConn)
 				server.connectionsMu.Unlock()
 			}()
-			server.serveConnection(rawConn)
+			server.serveConnection(rawConn, config)
 		}()
 	}
 }
 
-func (server *dockerSSHTestServer) serveConnection(rawConn net.Conn) {
-	serverConn, channels, requests, err := ssh.NewServerConn(rawConn, server.config)
+func (server *dockerSSHTestServer) serveConnection(rawConn net.Conn, config *ssh.ServerConfig) {
+	serverConn, channels, requests, err := ssh.NewServerConn(rawConn, config)
 	if err != nil {
 		return
 	}

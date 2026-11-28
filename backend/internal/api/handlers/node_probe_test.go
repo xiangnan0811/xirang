@@ -231,9 +231,6 @@ func TestNodeProbeSharedKeyConcurrentOutcomesSQLitePostgres(t *testing.T) {
 
 func TestNodeProbeHandlersReverseOrderAndCancellationSQLitePostgres(t *testing.T) {
 	retryTransactionForEachEngine(t, func(t *testing.T, engine string) {
-		server := startDockerSSHTestServer(t, nil)
-		db, _, _ := newMigratedNodeProbeFixture(t, engine)
-		node := seedDockerSSHHandlerNode(t, db, server)
 		entered := make(chan int32, 2)
 		releaseFirst, releaseThird := make(chan struct{}), make(chan struct{})
 		var firstOnce, thirdOnce sync.Once
@@ -242,21 +239,25 @@ func TestNodeProbeHandlersReverseOrderAndCancellationSQLitePostgres(t *testing.T
 		defer unblockFirst()
 		defer unblockThird()
 		var attempts atomic.Int32
-		server.config.PasswordCallback = func(metadata ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-			n := attempts.Add(1)
-			if n == 1 || n == 3 {
-				entered <- n
-				if n == 1 {
-					<-releaseFirst
-				} else {
-					<-releaseThird
+		server := startDockerSSHTestServer(t, nil, func(config *ssh.ServerConfig) {
+			config.PasswordCallback = func(metadata ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+				n := attempts.Add(1)
+				if n == 1 || n == 3 {
+					entered <- n
+					if n == 1 {
+						<-releaseFirst
+					} else {
+						<-releaseThird
+					}
 				}
+				if metadata.User() != "docker-test" || string(password) != dockerSSHTestPassword {
+					return nil, errors.New("invalid credentials")
+				}
+				return nil, nil
 			}
-			if metadata.User() != "docker-test" || string(password) != server.password {
-				return nil, errors.New("invalid credentials")
-			}
-			return nil, nil
-		}
+		})
+		db, _, _ := newMigratedNodeProbeFixture(t, engine)
+		node := seedDockerSSHHandlerNode(t, db, server)
 		invoke := func(ctx context.Context, h *NodeHandler) <-chan *httptest.ResponseRecorder {
 			done := make(chan *httptest.ResponseRecorder, 1)
 			go func() {
