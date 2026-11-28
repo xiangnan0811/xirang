@@ -28,7 +28,7 @@ func testNodeProbeGenerationMigration(t *testing.T, f migrationFixture) {
 			t.Fatal(err)
 		}
 		assertMigrationVersion(t, m, 100)
-		if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, f.engine, 100); err != nil {
 			t.Fatal(err)
 		}
 		node := probeTestGeneration(t, db, "nodes", 101)
@@ -58,7 +58,7 @@ func testNodeProbeGenerationMigration(t *testing.T, f migrationFixture) {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM node_probe_state`).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("ordering state survived reupgrade: %d %v", count, err)
 		}
-		if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, f.engine, 100); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -120,7 +120,7 @@ func testNodeProbeGenerationMigration(t *testing.T, f migrationFixture) {
 		} else {
 			f.mustExec(t, db, `CREATE OR REPLACE FUNCTION nodes_probe_generation_set() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
 		}
-		if err := VerifyCurrentSchema(f.recoveryWorkerGorm(t, db), f.engine); !errors.Is(err, ErrMigrationSchemaDrift) {
+		if err := validateMinimumRecoverySchema(db, f.engine, 100); !errors.Is(err, ErrMigrationSchemaDrift) {
 			t.Fatalf("expected trigger drift, got %v", err)
 		}
 		assertMigrationVersion(t, m, 100)

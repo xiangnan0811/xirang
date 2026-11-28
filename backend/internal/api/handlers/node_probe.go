@@ -2,13 +2,9 @@ package handlers
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -17,6 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodeprobe"
 	"xirang/backend/internal/sshutil"
 )
 
@@ -24,14 +21,7 @@ var errNodeProbeStale = errors.New("node probe is stale")
 
 const staleNodeProbeMessage = "节点配置在连接测试期间已变更，本次测试结果已过时，请重新测试"
 
-type nodeProbeState struct {
-	NodeID       uint `gorm:"primaryKey"`
-	AdmittedSeq  int64
-	AppliedSeq   int64
-	AppliedToken string
-}
-
-func (nodeProbeState) TableName() string { return "node_probe_state" }
+type nodeProbeState = nodeprobe.State
 
 type nodeProbeSnapshot struct {
 	node       model.Node
@@ -101,7 +91,7 @@ func lockProbeIdentity(tx *gorm.DB, id uint, credentials, effectiveKey bool) (mo
 	var node model.Node
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"})
 	if !credentials {
-		query = query.Select("id", "host", "port", "auth_type", "ssh_key_id", "probe_generation")
+		query = query.Select("id", "host", "port", "auth_type", "ssh_key_id", "probe_generation", "config_revision")
 	}
 	if err := query.First(&node, id).Error; err != nil {
 		return node, err
@@ -124,38 +114,25 @@ func lockProbeIdentity(tx *gorm.DB, id uint, credentials, effectiveKey bool) (mo
 }
 
 func probeIdentityToken(node model.Node, seq int64, now time.Time) string {
-	h := sha256.New()
-	write := func(s string) {
-		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], uint64(len(s)))
-		_, _ = h.Write(size[:])
-		_, _ = h.Write([]byte(s))
-	}
-	write(strconv.FormatUint(uint64(node.ID), 10))
-	write(node.ProbeGeneration)
-	if node.AuthType == "key" && node.SSHKeyID != nil {
-		write(strconv.FormatUint(uint64(*node.SSHKeyID), 10))
-		if node.SSHKey != nil {
-			write("present")
-			write(node.SSHKey.ProbeGeneration)
-			if node.SSHKey.ExpiresAt != nil && !node.SSHKey.ExpiresAt.After(now) {
-				write("expired")
-			} else {
-				write("valid")
-			}
-		} else {
-			write("missing")
-		}
-	} else {
-		write("none")
-	}
-	write(strconv.FormatInt(seq, 10))
-	return hex.EncodeToString(h.Sum(nil))
+	return nodeprobe.IdentityToken(node, seq, now)
 }
 
 func admitNodeProbe(ctx context.Context, db *gorm.DB, id uint) (nodeProbeSnapshot, error) {
+	return admitNodeProbeExpected(ctx, db, id, nil)
+}
+
+func admitNodeProbeExpected(ctx context.Context, db *gorm.DB, id uint, expected *string) (nodeProbeSnapshot, error) {
 	var snap nodeProbeSnapshot
 	err := nodeProbeTransaction(ctx, db, func(tx *gorm.DB) error {
+		if expected != nil {
+			var identity model.Node
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("config_revision").First(&identity, id).Error; err != nil {
+				return err
+			}
+			if identity.ConfigRevision != *expected {
+				return errNodeProbeStale
+			}
+		}
 		node, err := lockProbeIdentity(tx, id, true, true)
 		if err != nil {
 			return err
@@ -253,12 +230,16 @@ func applyNodeProbe(ctx context.Context, db *gorm.DB, snap nodeProbeSnapshot, st
 				lastUsed = result.RowsAffected > 0
 			}
 		}
-		if err := tx.Model(&nodeProbeState{}).Where("node_id = ?", node.ID).Updates(map[string]any{"applied_seq": snap.seq, "applied_token": snap.token}).Error; err != nil {
+		if err := tx.Model(&nodeProbeState{}).Where("node_id = ?", node.ID).Updates(map[string]any{"applied_seq": snap.seq, "applied_token": snap.token, "applied_status": status}).Error; err != nil {
 			return err
 		}
 		return ctx.Err()
 	})
 	return lastUsed, err
+}
+
+func loadNodeProbeEvidence(tx *gorm.DB, nodes []model.Node) (map[uint]nodeProbeState, error) {
+	return nodeprobe.LoadEvidence(tx, nodes)
 }
 
 func readNodeWithProbeToken(ctx context.Context, db *gorm.DB, id uint) (model.Node, string, error) {
@@ -271,14 +252,13 @@ func readNodeWithProbeToken(ctx context.Context, db *gorm.DB, id uint) (model.No
 		}).First(&node, id).Error; err != nil {
 			return err
 		}
-		var state nodeProbeState
-		err := tx.First(&state, "node_id = ?", id).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
+		nodes := []model.Node{node}
+		states, err := loadNodeProbeEvidence(tx, nodes)
 		if err != nil {
 			return err
 		}
+		node = nodes[0]
+		state := states[id]
 		if state.AppliedToken != "" && state.AppliedSeq == state.AdmittedSeq && state.AppliedToken == probeIdentityToken(node, state.AdmittedSeq, time.Now()) {
 			token = state.AppliedToken
 		}

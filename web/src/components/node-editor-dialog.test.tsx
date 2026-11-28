@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { runAxe } from "@/test/a11y-helpers";
+import { ApiError } from "@/lib/api/core";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
 import { NodeEditorDialog } from "./node-editor-dialog";
 
@@ -75,6 +76,13 @@ function renderEditor(props: Partial<Parameters<typeof NodeEditorDialog>[0]> = {
 
 const submitButton = () => screen.getByRole("button", { name: "保存并测试" });
 const testButton = () => screen.getByRole("button", { name: /测试连接|nodeEditor\.testingConnection|测试中/ });
+
+const REVISION_OPENED = "0123456789abcdef0123456789abcdef";
+const REVISION_SAVED = "fedcba9876543210fedcba9876543210";
+const revisionConflict = () =>
+  new ApiError(409, "conflict", { code: 409, message: "conflict", data: { error_code: "node_revision_conflict" } });
+const conflictNotice = /该节点已在别处被修改/;
+const reloadButton = () => screen.getByRole("button", { name: /重新加载已保存的节点|正在重新加载已保存的节点/ });
 
 describe("NodeEditorDialog", () => {
   const originalTZ = process.env.TZ;
@@ -699,6 +707,144 @@ describe("NodeEditorDialog", () => {
     expect(await screen.findByText("主机地址格式不合法")).toBeInTheDocument();
     expect(screen.getByLabelText("节点名称")).toHaveValue("prod-node-1");
     expect(screen.getByLabelText("节点名称")).not.toBeDisabled();
+  });
+
+  it("sends the opened revision and keeps the draft, created key and save lock on a revision conflict", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn<SaveFn>().mockImplementationOnce(async (_input, _nodeId, onKeyCreated) => {
+      onKeyCreated("key-new");
+      throw revisionConflict();
+    });
+    const onReloadNode = vi.fn<(nodeId: number) => Promise<NodeRecord | null>>();
+    const { onTestConnection } = renderEditor({ editingNode: makeNode({ revision: REVISION_OPENED }), onSave, onReloadNode });
+
+    await user.clear(screen.getByLabelText("主机地址"));
+    await user.type(screen.getByLabelText("主机地址"), "10.0.0.99");
+    await user.selectOptions(screen.getByLabelText("SSH 密钥"), "__new__");
+    await user.type(screen.getByLabelText("密钥名称"), "edge-key");
+    await user.type(screen.getByLabelText("内联新密钥"), "PRIVATE KEY");
+    await user.click(submitButton());
+
+    expect(onSave.mock.calls[0][0]).toMatchObject({ expectedRevision: REVISION_OPENED, host: "10.0.0.99" });
+    expect(await screen.findByText(conflictNotice)).toBeInTheDocument();
+    expect(reloadButton()).toBeEnabled();
+    expect(reloadButton()).toHaveFocus();
+    expect(screen.getByLabelText("主机地址")).toHaveValue("10.0.0.99");
+    expect(screen.getByLabelText("SSH 密钥")).toHaveValue("key-new");
+    expect(screen.getByRole("option", { name: "edge-key" })).toBeInTheDocument();
+    expect(screen.queryByText("conflict")).not.toBeInTheDocument();
+
+    // Neither the button nor an Enter submit can resend the stale form.
+    expect(submitButton()).toBeDisabled();
+    // Nor can this editor test saved settings it has not seen; the conflict must be resolved by reload first.
+    expect(testButton()).toBeDisabled();
+    await user.click(testButton());
+    expect(onTestConnection).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("主机地址"), "{Enter}");
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onReloadNode).not.toHaveBeenCalled();
+    expect(await runAxe(document.body)).toHaveNoViolations();
+  });
+
+  it("replaces the draft with the explicitly reloaded node and saves against its revision", async () => {
+    const user = userEvent.setup();
+    const reload = deferred<NodeRecord | null>();
+    const onSave = vi.fn<SaveFn>().mockRejectedValueOnce(revisionConflict()).mockResolvedValueOnce(undefined);
+    const onReloadNode = vi.fn<(nodeId: number) => Promise<NodeRecord | null>>(() => reload.promise);
+    renderEditor({ editingNode: makeNode({ revision: REVISION_OPENED }), onSave, onReloadNode });
+
+    await user.clear(screen.getByLabelText("标签"));
+    await user.type(screen.getByLabelText("标签"), "draft-only");
+    await user.click(submitButton());
+    await screen.findByText(conflictNotice);
+    await user.click(reloadButton());
+
+    expect(onReloadNode).toHaveBeenCalledWith(10);
+    expect(reloadButton()).toHaveAccessibleName("正在重新加载已保存的节点…");
+    expect(reloadButton()).toBeDisabled();
+    // The disabled button cannot keep focus; the conflict notice holds it inside the dialog meanwhile.
+    expect(reloadButton()).not.toHaveFocus();
+    expect(screen.getByText(conflictNotice).closest("[tabindex='-1']")).toHaveFocus();
+    expect(screen.getByLabelText("标签")).toBeDisabled();
+    expect(screen.getByLabelText("标签")).toHaveValue("draft-only");
+
+    await act(async () => {
+      reload.resolve(makeNode({ host: "10.10.0.77", revision: REVISION_SAVED }));
+      await reload.promise;
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("主机地址")).toHaveValue("10.10.0.77"));
+    expect(screen.getByLabelText("标签")).toHaveValue("prod,web");
+    expect(screen.queryByText(conflictNotice)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("节点名称")).toHaveFocus();
+    expect(submitButton()).toBeEnabled();
+    expect(testButton()).toBeEnabled();
+
+    // Later renders of the same session leave focus where the user put it.
+    await user.click(screen.getByLabelText("标签"));
+    await user.type(screen.getByLabelText("标签"), ",edge");
+    expect(screen.getByLabelText("标签")).toHaveFocus();
+
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave.mock.calls[1][0]).toMatchObject({ expectedRevision: REVISION_SAVED, host: "10.10.0.77" });
+  });
+
+  it("keeps the draft and offers the reload again when reloading the saved node fails", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn<SaveFn>().mockRejectedValue(revisionConflict());
+    const onReloadNode = vi
+      .fn<(nodeId: number) => Promise<NodeRecord | null>>()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(makeNode({ revision: REVISION_SAVED }));
+    renderEditor({ editingNode: makeNode({ revision: REVISION_OPENED }), onSave, onReloadNode });
+
+    await user.clear(screen.getByLabelText("标签"));
+    await user.type(screen.getByLabelText("标签"), "draft-only");
+    await user.click(submitButton());
+    await screen.findByText(conflictNotice);
+    await user.click(reloadButton());
+
+    expect(await screen.findByText("无法重新加载已保存的节点。草稿已保留，请重试。")).toBeInTheDocument();
+    expect(reloadButton()).toBeEnabled();
+    expect(reloadButton()).toHaveFocus();
+    expect(screen.getByLabelText("标签")).toHaveValue("draft-only");
+    expect(screen.getByLabelText("标签")).not.toBeDisabled();
+    expect(submitButton()).toBeDisabled();
+    expect(testButton()).toBeDisabled();
+
+    // Keyboard retry from the refocused button.
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByLabelText("标签")).toHaveValue("prod,web"));
+    expect(screen.getByLabelText("节点名称")).toHaveFocus();
+    expect(onReloadNode).toHaveBeenCalledTimes(2);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a reload that settles after the editor was closed and reopened", async () => {
+    const user = userEvent.setup();
+    const reload = deferred<NodeRecord | null>();
+    const onSave = vi.fn<SaveFn>().mockRejectedValueOnce(revisionConflict());
+    const onReloadNode = vi.fn<(nodeId: number) => Promise<NodeRecord | null>>(() => reload.promise);
+    const node = makeNode({ revision: REVISION_OPENED });
+    const shared = { onOpenChange: () => {}, sshKeys, onSave, onReloadNode };
+    const { rerender } = render(<NodeEditorDialog open editingNode={node} {...shared} />);
+
+    await user.click(submitButton());
+    await screen.findByText(conflictNotice);
+    await user.click(reloadButton());
+
+    rerender(<NodeEditorDialog open={false} editingNode={null} {...shared} />);
+    rerender(<NodeEditorDialog open editingNode={node} {...shared} />);
+    await waitFor(() => expect(screen.getByLabelText("节点名称")).toHaveValue("prod-node-1"));
+    expect(screen.queryByText(conflictNotice)).not.toBeInTheDocument();
+
+    await act(async () => {
+      reload.resolve(makeNode({ host: "10.10.0.77", revision: REVISION_SAVED }));
+      await reload.promise;
+    });
+    expect(screen.getByLabelText("主机地址")).toHaveValue("10.10.0.11");
+    expect(submitButton()).toBeEnabled();
   });
 
   it("has no axe violations in create and edit modes", async () => {

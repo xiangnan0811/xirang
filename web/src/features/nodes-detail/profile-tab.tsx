@@ -1,4 +1,11 @@
 import { useTranslation } from "react-i18next";
+import { NodeConnectionEvidenceNote } from "@/components/node-connection-evidence";
+import {
+  describeNodeConnectionEvidence,
+  formatNodeConnectionLatency,
+  getNodeLastTestStatus,
+  getNodeStatusMeta,
+} from "@/lib/status";
 import type { NodeRecord } from "@/types/domain";
 
 type ProfileTabProps = {
@@ -33,12 +40,13 @@ export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabPr
   if (node == null) {
     return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.profileNotFound")}</p>;
   }
+  const evidence = describeNodeConnectionEvidence(node);
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2" data-testid="profile-tab">
       <section className="rounded-md border border-border bg-card p-4">
         <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileBasic")}</h3>
-        <dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-2 text-sm">
+        <dl className="mt-3 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileName")}</dt>
           <dd>{node.name}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileAddress")}</dt>
@@ -49,8 +57,6 @@ export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabPr
           <dd>{node.username}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileTags")}</dt>
           <dd className="min-w-0 [overflow-wrap:anywhere]">{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileStatus")}</dt>
-          <dd>{node.status}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileBackupDir")}</dt>
           <dd>{node.backupDir || "-"}</dd>
         </dl>
@@ -58,11 +64,16 @@ export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabPr
 
       <section className="rounded-md border border-border bg-card p-4">
         <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileTimeMaint")}</h3>
-        <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
+        <dl className="mt-3 grid grid-cols-[140px_1fr] gap-x-3 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastTestResult")}</dt>
+          <dd className="min-w-0">
+            <span>{getNodeStatusMeta(getNodeLastTestStatus(node)).label}</span>
+            <NodeConnectionEvidenceNote evidence={evidence} className="mt-0.5" />
+          </dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastSeen")}</dt>
-          <dd>{formatRecordedTime(node.lastSeenAt)}</dd>
+          <dd>{formatRecordedTime(evidence.testedAt ?? "")}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLatency")}</dt>
-          <dd>{node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-"}</dd>
+          <dd>{formatNodeConnectionLatency(evidence)}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
           <dd>{formatRecordedTime(node.lastBackupAt)}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileMaintWindow")}</dt>

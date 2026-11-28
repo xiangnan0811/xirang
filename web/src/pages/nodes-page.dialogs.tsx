@@ -65,6 +65,7 @@ export type NodesPageDialogsProps = Pick<
   | "dialog"
   | "refreshNodes"
   | "handleSaveNode"
+  | "reloadEditingNode"
   | "handleTestConnection"
   | "isAdmin"
   | "canOperateNodes"
@@ -122,6 +123,7 @@ export function NodesPageDialogs({
   dialog,
   refreshNodes,
   handleSaveNode,
+  reloadEditingNode,
   handleTestConnection,
   isAdmin,
   canOperateNodes,
@@ -145,6 +147,7 @@ export function NodesPageDialogs({
             editingNode={editingNode}
             sshKeys={sshKeys}
             onSave={handleSaveNode}
+            onReloadNode={reloadEditingNode}
             onTestConnection={handleTestConnection}
           />
         </Suspense>

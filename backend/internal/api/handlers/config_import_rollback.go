@@ -640,6 +640,17 @@ func (snapshot *configImportTableSnapshot) restorePrior(ctx context.Context, tx 
 		if !ok {
 			return fmt.Errorf("config import rollback prior row %s in %s is unavailable", key, snapshot.table)
 		}
+		if snapshot.table == "nodes" {
+			// Revisions are database-owned. Keep the sealed value in the CAS
+			// predicate, but let the trigger assign a fresh revision on restore.
+			restored := make(map[string]any, len(row))
+			for column, value := range row {
+				if column != "config_revision" {
+					restored[column] = value
+				}
+			}
+			row = restored
+		}
 		predicate, args, err := configImportCASPredicate(tx, snapshot.primaryKey, expectedCurrent)
 		if err != nil {
 			return err

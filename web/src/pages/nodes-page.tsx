@@ -277,14 +277,20 @@ export function NodesPage() {
           {
             title: t("nodes.totalNodes"),
             value: nodes.length,
-            description: t("nodes.totalNodesDesc"),
+            description: nodeStats.untested > 0
+              ? t("nodes.totalNodesUntestedDesc", { count: nodeStats.untested })
+              : t("nodes.totalNodesDesc"),
             tone: "info",
           },
           {
             title: t("nodes.onlineNodes"),
             value: nodeStats.online,
+            // The rate describes latest tests, so untested nodes are not in its denominator. Servers without
+            // revisions never report untested nodes, so this stays the share of all nodes there.
             description: t("nodes.onlineNodesDesc", {
-              rate: nodes.length ? Math.round((nodeStats.online / nodes.length) * 100) : 0,
+              rate: nodes.length > nodeStats.untested
+                ? Math.round((nodeStats.online / (nodes.length - nodeStats.untested)) * 100)
+                : 0,
             }),
             tone: "success",
           },
@@ -353,6 +359,7 @@ export function NodesPage() {
               <option value="online">{t("status.node.online")}</option>
               <option value="warning">{t("status.node.warning")}</option>
               <option value="offline">{t("status.node.offline")}</option>
+              <option value="untested">{t("status.node.untested")}</option>
             </Select>
             <Select
               containerClassName="w-full"
@@ -462,6 +469,7 @@ export function NodesPage() {
         dialog={state.dialog}
         refreshNodes={state.refreshNodes}
         handleSaveNode={state.handleSaveNode}
+        reloadEditingNode={state.reloadEditingNode}
         handleTestConnection={state.handleTestConnection}
         doctorNode={state.doctorNode}
         doctorResult={state.doctorResult}

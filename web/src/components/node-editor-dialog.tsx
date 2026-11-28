@@ -10,6 +10,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { formatUtcOffset, parseDatetimeLocalValue, toDatetimeLocalValue } from "@/lib/date-utils";
+import { isNodeRevisionConflictError } from "@/lib/api/nodes-api";
 import { getErrorMessage } from "@/lib/utils";
 import {
   parseSSHKeyType,
@@ -55,6 +56,10 @@ type FieldKey =
 type FieldErrors = Partial<Record<FieldKey, string>>;
 
 type ActionError = { kind: "save" | "test"; message: string };
+
+// The node was saved elsewhere after this form opened. The draft stays untouched and saving stays blocked
+// until the saved node is explicitly reloaded; a failed reload keeps the draft and offers the reload again.
+type RevisionConflict = { phase: "pending" | "reloading" | "failed" };
 
 const NEW_KEY_OPTION = "__new__";
 
@@ -318,6 +323,8 @@ function buildNodeInput({ draft, baseline, editingNode }: EditorContext): NewNod
     basePath: isEditing && (draft.basePath === "" || draft.basePath === baseline.basePath)
       ? undefined
       : draft.basePath,
+    // The revision this form was opened (or explicitly reloaded) from, never the live inventory's.
+    ...(editingNode?.revision ? { expectedRevision: editingNode.revision } : {}),
     backupDir: draft.backupDir,
     useSudo: draft.useSudo,
     inlineKeyName: useInlineKey ? draft.inlineKeyName : undefined,
@@ -384,8 +391,11 @@ type NodeEditorDialogProps = {
    * onSave 在节点写入落定时结算（成功后的连接测试由页面另行发起）。
    * 内联新建密钥成功后、写节点之前，页面调用 onKeyCreated；若随后写节点失败，
    * 编辑器改为绑定这把已创建的密钥，重试时不会再次创建同名密钥。
+   * 以 node_revision_conflict 拒绝时编辑器保留草稿，并在显式重新加载前阻止再次提交。
    */
   onSave: (input: NewNodeInput, nodeId: number | undefined, onKeyCreated: (keyId: string) => void) => Promise<void>;
+  /** Reads the saved node after a revision conflict; null when the requesting admin lifetime ended. */
+  onReloadNode?: (nodeId: number) => Promise<NodeRecord | null>;
   onTestConnection?: (nodeId: number) => Promise<void>;
   onCloseAutoFocus?: DialogCloseAutoFocus;
 };
@@ -398,16 +408,21 @@ export function NodeEditorDialog({
   editingNode,
   sshKeys,
   onSave,
+  onReloadNode,
   onTestConnection,
   onCloseAutoFocus,
 }: NodeEditorDialogProps) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useDialogDraft<NodeEditorDraft, NodeRecord>(open, emptyDraft, editingNode, toDraft);
+  // After an explicit reload the saved node replaces the opened snapshot as this session's source.
+  const [reloadedNode, setReloadedNode] = useState<NodeRecord | null>(null);
+  const sourceNode = reloadedNode ?? editingNode ?? null;
+  const [draft, setDraft] = useDialogDraft<NodeEditorDraft, NodeRecord>(open, emptyDraft, sourceNode, toDraft);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [backupDirManuallyEdited, setBackupDirManuallyEdited] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [actionError, setActionError] = useState<ActionError | null>(null);
+  const [conflict, setConflict] = useState<RevisionConflict | null>(null);
   // 本次打开期间内联新建成功、但节点写入失败的密钥；列表尚未刷新出它时用于兜底显示。
   const [createdKey, setCreatedKey] = useState<CreatedKey | null>(null);
 
@@ -422,6 +437,8 @@ export function NodeEditorDialog({
     setSaving(false);
     setTesting(false);
     setCreatedKey(null);
+    setReloadedNode(null);
+    setConflict(null);
   }
   const sessionRef = useRef(editorSession.id);
   useLayoutEffect(() => {
@@ -431,7 +448,16 @@ export function NodeEditorDialog({
   // 锁记录持有者的会话编号；只有当前会话持有的锁才算数。
   const savingLockRef = useRef<number | null>(null);
   const testingLockRef = useRef<number | null>(null);
+  const reloadingLockRef = useRef<number | null>(null);
+  // Session holding an unresolved revision conflict; it blocks saving until the reload succeeds.
+  const conflictLockRef = useRef<number | null>(null);
   const actionErrorRef = useRef<HTMLDivElement>(null);
+  const conflictRef = useRef<HTMLDivElement>(null);
+  const reloadButtonRef = useRef<HTMLButtonElement>(null);
+  // Where this session's own conflict step moves focus once it commits; unrelated renders never move it.
+  // A conflict and a failed reload focus the reload button, a successful reload the reloaded form's first field.
+  // While the reload runs its button is disabled, so a focused button hands focus to the notice meanwhile.
+  const conflictFocusRef = useRef<"reload" | "notice" | "form" | null>(null);
 
   useEffect(() => {
     if (actionError) {
@@ -439,8 +465,24 @@ export function NodeEditorDialog({
     }
   }, [actionError]);
 
-  const baseline = useMemo(() => (editingNode ? toDraft(editingNode) : emptyDraft), [editingNode]);
-  const context: EditorContext = { draft, baseline, editingNode: editingNode ?? null };
+  useEffect(() => {
+    if (conflict?.phase === "pending") {
+      conflictRef.current?.scrollIntoView?.({ block: "nearest" });
+    }
+    const target = conflictFocusRef.current;
+    if (!target) return;
+    conflictFocusRef.current = null;
+    if (target === "reload") {
+      reloadButtonRef.current?.focus();
+    } else if (target === "notice") {
+      conflictRef.current?.focus({ preventScroll: true });
+    } else {
+      document.getElementById(FIELD_IDS.name)?.focus();
+    }
+  }, [conflict]);
+
+  const baseline = useMemo(() => (sourceNode ? toDraft(sourceNode) : emptyDraft), [sourceNode]);
+  const context: EditorContext = { draft, baseline, editingNode: sourceNode };
   const isEditing = Boolean(draft.id);
 
   // 对话框关闭后重置标记
@@ -448,7 +490,8 @@ export function NodeEditorDialog({
     setBackupDirManuallyEdited(false);
   }
 
-  const busy = saving || testing;
+  const reloading = conflict?.phase === "reloading";
+  const busy = saving || testing || reloading;
   const connectionDirty = isEditing && hasConnectionChanges(draft, baseline);
   const storedInlineKey = isEditing && baseline.authType === "key" && baseline.keyId === "";
   const storedPassword = isEditing && baseline.authType === "password";
@@ -508,9 +551,12 @@ export function NodeEditorDialog({
     }
   };
 
+  const sessionLocked = (session: number) =>
+    savingLockRef.current === session || testingLockRef.current === session || reloadingLockRef.current === session;
+
   const handleSave = async () => {
     const session = sessionRef.current;
-    if (savingLockRef.current === session || testingLockRef.current === session) {
+    if (sessionLocked(session) || conflictLockRef.current === session) {
       return;
     }
     const errors = validateDraft(context, t);
@@ -544,7 +590,13 @@ export function NodeEditorDialog({
       await onSave(input, draft.id, onKeyCreated);
     } catch (error) {
       if (isCurrent()) {
-        setActionError({ kind: "save", message: getErrorMessage(error) });
+        if (isNodeRevisionConflictError(error)) {
+          conflictLockRef.current = session;
+          conflictFocusRef.current = "reload";
+          setConflict({ phase: "pending" });
+        } else {
+          setActionError({ kind: "save", message: getErrorMessage(error) });
+        }
       }
     } finally {
       if (savingLockRef.current === session) {
@@ -556,10 +608,50 @@ export function NodeEditorDialog({
     }
   };
 
+  // 显式重新加载已保存的节点：成功后以其替换草稿与基线（含修订号），失败时保留草稿并可重试。
+  const handleReloadSavedNode = async () => {
+    const session = sessionRef.current;
+    const nodeId = draft.id;
+    if (!nodeId || !onReloadNode || conflictLockRef.current !== session || sessionLocked(session)) {
+      return;
+    }
+    const isCurrent = () => sessionRef.current === session;
+    reloadingLockRef.current = session;
+    if (document.activeElement === reloadButtonRef.current) {
+      conflictFocusRef.current = "notice";
+    }
+    setConflict({ phase: "reloading" });
+    try {
+      const saved = await onReloadNode(nodeId);
+      if (!isCurrent()) return;
+      if (!saved || saved.id !== nodeId) {
+        conflictFocusRef.current = "reload";
+        setConflict({ phase: "failed" });
+        return;
+      }
+      conflictLockRef.current = null;
+      conflictFocusRef.current = "form";
+      setReloadedNode(saved);
+      setConflict(null);
+      setFieldErrors({});
+      setActionError(null);
+    } catch {
+      if (isCurrent()) {
+        conflictFocusRef.current = "reload";
+        setConflict({ phase: "failed" });
+      }
+    } finally {
+      if (reloadingLockRef.current === session) {
+        reloadingLockRef.current = null;
+      }
+    }
+  };
+
   // 测试的是已保存的配置；表单有未保存的连接改动时仍可测试，只提示两者的区别。
+  // 修订冲突未解决时不测试：已保存的设置此表单尚未见过，须先显式重新加载。
   const handleTestConnection = async () => {
     const session = sessionRef.current;
-    if (!draft.id || !onTestConnection || savingLockRef.current === session || testingLockRef.current === session) {
+    if (!draft.id || !onTestConnection || sessionLocked(session) || conflictLockRef.current === session) {
       return;
     }
     testingLockRef.current = session;
@@ -594,7 +686,7 @@ export function NodeEditorDialog({
         : t('nodeEditor.descCreate')}
       saving={saving}
       lockWhileSaving
-      submitDisabled={testing}
+      submitDisabled={testing || conflict !== null}
       onSubmit={handleSave}
       submitLabel={t('nodeEditor.submitLabel')}
       extraFooter={isEditing ? (
@@ -604,7 +696,7 @@ export function NodeEditorDialog({
             variant="outline"
             loading={testing}
             onClick={() => void handleTestConnection()}
-            disabled={busy}
+            disabled={busy || conflict !== null}
             aria-describedby={connectionDirty ? "node-edit-test-dirty-hint" : undefined}
           >
             {testing ? t('nodeEditor.testingConnection') : t('nodeEditor.testConnection')}
@@ -617,6 +709,32 @@ export function NodeEditorDialog({
         </>
       ) : null}
     >
+      {conflict ? (
+        <div ref={conflictRef} tabIndex={-1} className="outline-none">
+          <InlineAlert tone="warning">
+            <div className="space-y-2">
+              <p>{t('nodeEditor.revisionConflict')}</p>
+              {conflict.phase === "failed" ? (
+                <p className="font-medium">{t('nodeEditor.reloadSavedNodeFailed')}</p>
+              ) : null}
+              {onReloadNode ? (
+                <Button
+                  ref={reloadButtonRef}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  loading={reloading}
+                  disabled={busy}
+                  onClick={() => void handleReloadSavedNode()}
+                >
+                  {reloading ? t('nodeEditor.reloadingSavedNode') : t('nodeEditor.reloadSavedNode')}
+                </Button>
+              ) : null}
+            </div>
+          </InlineAlert>
+        </div>
+      ) : null}
+
       {actionError ? (
         <div ref={actionErrorRef}>
           <InlineAlert
@@ -628,7 +746,7 @@ export function NodeEditorDialog({
         </div>
       ) : null}
 
-      <EditorSection legend={t('nodeEditor.sectionConnection')} disabled={saving}>
+      <EditorSection legend={t('nodeEditor.sectionConnection')} disabled={saving || reloading}>
         <div>
           <label htmlFor="node-edit-name" className={labelClass}>{t('nodeEditor.nodeName')}</label>
           <Input id="node-edit-name" placeholder={t('nodeEditor.namePlaceholder')}
@@ -706,7 +824,7 @@ export function NodeEditorDialog({
         )}
       </EditorSection>
 
-      <EditorSection legend={t('nodeEditor.sectionAuth')} disabled={saving}>
+      <EditorSection legend={t('nodeEditor.sectionAuth')} disabled={saving || reloading}>
         <div>
           <label htmlFor="node-edit-auth" className={labelClass}>{t('nodeEditor.authMethod')}</label>
           <Select id="node-edit-auth" containerClassName="w-full"
@@ -822,7 +940,7 @@ export function NodeEditorDialog({
         ) : null}
       </EditorSection>
 
-      <EditorSection legend={t('nodeEditor.sectionPaths')} disabled={saving}>
+      <EditorSection legend={t('nodeEditor.sectionPaths')} disabled={saving || reloading}>
         <div>
           <label htmlFor="node-edit-base-path" className={labelClass}>{t('nodeEditor.basePath')}</label>
           <Input id="node-edit-base-path" placeholder="/"
@@ -885,7 +1003,7 @@ export function NodeEditorDialog({
         </div>
       </EditorSection>
 
-      <EditorSection legend={t('nodeEditor.sectionSchedule')} disabled={saving}>
+      <EditorSection legend={t('nodeEditor.sectionSchedule')} disabled={saving || reloading}>
         <div>
           <label htmlFor="node-edit-tags" className={labelClass}>{t('nodeEditor.tags')}</label>
           <Input id="node-edit-tags" placeholder={t('nodeEditor.tagsPlaceholder')}

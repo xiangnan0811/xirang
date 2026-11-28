@@ -1727,7 +1727,13 @@ func persistConfigImportNodeRelations(tx *gorm.DB, decision *configImportDecisio
 			candidate.row = node
 			continue
 		}
-		if err := tx.WithContext(tx.Statement.Context).Save(&node).Error; err != nil {
+		// Existing node credentials are retained, even when the import supplies
+		// secret fields. Validate their decryption above but do not re-encrypt or
+		// write them: randomized ciphertext would change the configuration revision.
+		persisted := node
+		persisted.Password = ""
+		persisted.PrivateKey = ""
+		if err := tx.WithContext(tx.Statement.Context).Omit("Password", "PrivateKey").Save(&persisted).Error; err != nil {
 			return fmt.Errorf("保存导入节点失败: %w", err)
 		}
 		accumulator.recordWrite(configImportEntityNodes, node.ID)

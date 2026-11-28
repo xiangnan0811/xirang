@@ -8,7 +8,8 @@ import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ThemeProvider } from "@/context/theme-context";
 import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
+import type { NodesContextValue } from "@/context/nodes-context.shared";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, NodeRecord, NodeSaveResult, TaskRecord } from "@/types/domain";
 
 const EMERGENCY_PROOF = "fresh-manual-proof";
 
@@ -26,6 +27,9 @@ const {
   clearStepUpProofMock,
   oneShotStepUpOptions,
   getBatchStatusMock,
+  getNodeMock,
+  editorSaveErrorMock,
+  editorReloadResultMock,
 } = vi.hoisted(() => {
   const clearStepUpProofMock = vi.fn();
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
@@ -48,6 +52,9 @@ const {
     clearStepUpProofMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
     getBatchStatusMock: vi.fn(),
+    getNodeMock: vi.fn(),
+    editorSaveErrorMock: vi.fn(),
+    editorReloadResultMock: vi.fn(),
   };
 });
 
@@ -147,14 +154,18 @@ vi.mock("@/components/batch-command-dialog", () => ({
   ),
 }));
 
+// The real editor sends the revision it opened and owns conflict feedback; the mock records both.
 vi.mock("@/components/node-editor-dialog", () => ({
   NodeEditorDialog: ({
     open,
+    onOpenChange,
     editingNode,
     onSave,
+    onReloadNode,
   }: {
     open: boolean;
-    editingNode: { id?: number; name: string } | null;
+    onOpenChange?: (open: boolean) => void;
+    editingNode: { id?: number; name: string; revision?: string } | null;
     onSave?: (input: {
       name: string;
       host: string;
@@ -162,7 +173,9 @@ vi.mock("@/components/node-editor-dialog", () => ({
       username: string;
       authType: "key";
       tags: string;
+      expectedRevision?: string;
     }, nodeId?: number) => Promise<void>;
+    onReloadNode?: (nodeId: number) => Promise<unknown>;
   }) =>
     open ? (
       <div role="dialog" aria-label={editingNode ? `编辑节点 - ${editingNode.name}` : "编辑节点"}>
@@ -170,7 +183,7 @@ vi.mock("@/components/node-editor-dialog", () => ({
         <button
           type="button"
           onClick={() => {
-            void onSave?.(
+            void Promise.resolve(onSave?.(
               {
                 name: editingNode?.name ?? "node-new",
                 host: "10.0.0.9",
@@ -178,12 +191,26 @@ vi.mock("@/components/node-editor-dialog", () => ({
                 username: "root",
                 authType: "key",
                 tags: "prod",
+                ...(editingNode?.revision ? { expectedRevision: editingNode.revision } : {}),
               },
               editingNode?.id,
-            );
+            )).catch(editorSaveErrorMock);
           }}
         >
           保存并测试
+        </button>
+        {editingNode?.id ? (
+          <button
+            type="button"
+            onClick={() => {
+              void Promise.resolve(onReloadNode?.(editingNode.id ?? 0)).then(editorReloadResultMock, editorReloadResultMock);
+            }}
+          >
+            Reload saved node
+          </button>
+        ) : null}
+        <button type="button" onClick={() => onOpenChange?.(false)}>
+          Close editor
         </button>
       </div>
     ) : null,
@@ -209,6 +236,7 @@ vi.mock("@/lib/api/client", () => ({
     requestTaskManualTriggerCredentialGrant: grantMock,
     emergencyBackup: emergencyBackupMock,
     getBatchStatus: getBatchStatusMock,
+    getNode: getNodeMock,
   },
 }));
 
@@ -283,8 +311,8 @@ function createContext(overrides?: Record<string, unknown>) {
   };
   nodesRef.current = {
     nodes: defaultNodes,
-    createNode: vi.fn().mockResolvedValue(3),
-    updateNode: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn().mockResolvedValue({ id: 3 }),
+    updateNode: vi.fn(async (nodeId: number) => ({ id: nodeId })),
     deleteNode: vi.fn().mockResolvedValue(undefined),
     deleteNodes: vi.fn().mockResolvedValue({ deleted: 0, notFoundIds: [] }),
     testNodeConnection: vi.fn().mockResolvedValue({ ok: true, message: "连接成功" }),
@@ -404,6 +432,31 @@ class DeferredTextFile extends File {
   }
 }
 
+const REVISION_A = "0123456789abcdef0123456789abcdef";
+const REVISION_B = "1123456789abcdef0123456789abcdef";
+const REVISION_C = "2123456789abcdef0123456789abcdef";
+const REVISION_D = "3123456789abcdef0123456789abcdef";
+
+function revisedNode(revision: string, overrides: Partial<NodeRecord> = {}): NodeRecord {
+  return {
+    id: 1,
+    name: "node-prod-1",
+    host: "node-prod-1.example.com",
+    address: "10.0.0.1",
+    ip: "10.0.0.1",
+    port: 22,
+    username: "root",
+    authType: "key",
+    keyId: "key-1",
+    tags: ["prod"],
+    status: "online",
+    lastSeenAt: "2026-02-24 12:00:00",
+    lastBackupAt: "2026-02-24 11:50:00",
+    revision,
+    ...overrides,
+  };
+}
+
 describe("NodesPage", () => {
   beforeEach(() => {
     Object.defineProperty(window, "localStorage", {
@@ -415,6 +468,9 @@ describe("NodesPage", () => {
     confirmMock.mockResolvedValue(true);
     cancelPendingMock.mockClear();
     getBatchStatusMock.mockReset();
+    getNodeMock.mockReset();
+    editorSaveErrorMock.mockReset();
+    editorReloadResultMock.mockReset();
     navigateMock.mockReset();
     setSearchParamsMock.mockReset();
     toastSuccessMock.mockReset();
@@ -963,7 +1019,7 @@ describe("NodesPage", () => {
   it("保存后自动测试遇到未知主机密钥时弹出指纹确认", async () => {
     const user = userEvent.setup();
     const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
-    const createNode = vi.fn().mockResolvedValue(9);
+    const createNode = vi.fn().mockResolvedValue({ id: 9 });
     createContext({ testNodeConnection, createNode });
 
     render(
@@ -980,6 +1036,337 @@ describe("NodesPage", () => {
     expect(createNode).toHaveBeenCalled();
     expect(testNodeConnection).toHaveBeenCalledWith(9);
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("旧表单保存遇到修订冲突时保留编辑器、不提示也不测试，即使列表已刷新出新修订", async () => {
+    const user = userEvent.setup();
+    const conflict = new ApiError(409, "conflict", { code: 409, message: "conflict", data: { error_code: "node_revision_conflict" } });
+    const updateNode = vi.fn().mockRejectedValue(conflict);
+    const testNodeConnection = vi.fn();
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    // Another save lands and the inventory refresh publishes it while this form stays open.
+    nodesRef.current.nodes = [revisedNode(REVISION_B)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+
+    await waitFor(() => expect(editorSaveErrorMock).toHaveBeenCalledWith(conflict));
+    expect(updateNode).toHaveBeenCalledTimes(1);
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_A });
+    expect(testNodeConnection).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "编辑节点 - node-prod-1" })).toBeInTheDocument();
+  });
+
+  it("显式重新加载按当前 token 读取已保存节点，身份变化后丢弃迟到结果", async () => {
+    const user = userEvent.setup();
+    const saved = revisedNode(REVISION_B, { host: "10.0.0.42" });
+    const pendingReload = createDeferred<NodeRecord>();
+    getNodeMock.mockResolvedValueOnce(saved).mockReturnValueOnce(pendingReload.promise);
+    createContext({ nodes: [revisedNode(REVISION_A)] });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(saved));
+    expect(getNodeMock).toHaveBeenCalledWith("test-token", 1);
+
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(2));
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    await act(async () => {
+      pendingReload.resolve(saved);
+    });
+
+    expect(editorReloadResultMock).toHaveBeenCalledTimes(2);
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(null);
+  });
+
+  it("保存成功后的自动测试只针对本次提交的修订，与此后刷新的列表无关", async () => {
+    const user = userEvent.setup();
+    const pendingUpdate = createDeferred<NodeSaveResult | null>();
+    const createNode = vi.fn().mockResolvedValue({ id: 9, revision: REVISION_A });
+    const updateNode = vi.fn(() => pendingUpdate.promise);
+    const testNodeConnection = vi.fn().mockResolvedValue({ ok: true, message: "连接成功" });
+    createContext({ nodes: [revisedNode(REVISION_A)], createNode, updateNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getByRole("button", { name: "新增节点" }));
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledWith(9, { expectedRevision: REVISION_A }));
+
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    // The save is slow and a later revision reaches the inventory first; the probe still names this save's.
+    nodesRef.current.nodes = [revisedNode(REVISION_D)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await act(async () => {
+      pendingUpdate.resolve({ id: 1, revision: REVISION_C });
+    });
+
+    await waitFor(() => expect(testNodeConnection).toHaveBeenLastCalledWith(1, { expectedRevision: REVISION_C }));
+    expect(testNodeConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("显式重新加载成功后关闭再打开，列表读取延迟或仍发布旧行时编辑器以重新加载的节点为准", async () => {
+    const user = userEvent.setup();
+    const reloaded = revisedNode(REVISION_B, { host: "10.0.0.42" });
+    const otherNode = revisedNode(REVISION_C, { id: 2, name: "node-dr-2", host: "node-dr-2.example.com", ip: "10.0.0.2", address: "10.0.0.2", tags: ["dr"] });
+    getNodeMock.mockResolvedValueOnce(reloaded);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>(async (nodeId) => ({ id: nodeId, revision: REVISION_D }));
+    const refreshNodes = vi.fn(() => new Promise<void>(() => {}));
+    createContext({ nodes: [revisedNode(REVISION_A), otherNode], updateNode, refreshNodes });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    const refreshesBeforeReload = refreshNodes.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(reloaded));
+    // The inventory is asked to catch up; its read stays in flight for the rest of this test.
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    expect(screen.queryByRole("dialog", { name: "编辑节点 - node-prod-1" })).not.toBeInTheDocument();
+
+    // A delayed list read still publishes the revision that conflicted.
+    nodesRef.current.nodes = [revisedNode(REVISION_A), otherNode];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+    // Another node keeps its own row.
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-dr-2"), "node-dr-2", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(2));
+    expect(updateNode.mock.calls[1]?.[0]).toBe(1);
+    expect(updateNode.mock.calls[1]?.[1]).toMatchObject({ expectedRevision: REVISION_B });
+  });
+
+  it("重新加载读取期间列表发布了该节点的另一修订时拒绝较早的读取，保留草稿可重试，且不缓存它", async () => {
+    const user = userEvent.setup();
+    const pendingReload = createDeferred<NodeRecord>();
+    const published = revisedNode(REVISION_C, { host: "10.0.0.43" });
+    getNodeMock.mockReturnValueOnce(pendingReload.promise).mockResolvedValueOnce(published);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>().mockRejectedValue(new Error("stop"));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(1));
+    // A refresh publishes revision C while the detail read is outstanding; the read then settles with B.
+    nodesRef.current.nodes = [published];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await act(async () => {
+      pendingReload.resolve(revisedNode(REVISION_B, { host: "10.0.0.42" }));
+    });
+
+    // Opaque revisions cannot order B against C: the editor gets a failure, keeps its draft and may retry.
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(1));
+    expect(editorReloadResultMock.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(screen.getByRole("dialog", { name: "编辑节点 - node-prod-1" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(2));
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(published);
+
+    // B was never cached: a new edit session starts from the published C.
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+  });
+
+  it("关闭再打开后，前一编辑会话迟到的重新加载结果既不回报、不缓存也不刷新", async () => {
+    const user = userEvent.setup();
+    const pendingOldReload = createDeferred<NodeRecord>();
+    const current = revisedNode(REVISION_C, { host: "10.0.0.44" });
+    getNodeMock.mockReturnValueOnce(pendingOldReload.promise).mockResolvedValueOnce(current);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>().mockRejectedValue(new Error("stop"));
+    const refreshNodes = vi.fn(() => new Promise<void>(() => {}));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode, refreshNodes });
+
+    renderNodesPage();
+    const openEditor = () =>
+      clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await openEditor();
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+
+    // A new session of the same node reloads C; its inventory refresh stays pending.
+    await openEditor();
+    const refreshesBeforeReload = refreshNodes.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(current));
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+
+    // The first session's read settles last with B: dropped silently, C stays the remembered node.
+    await act(async () => {
+      pendingOldReload.resolve(revisedNode(REVISION_B, { host: "10.0.0.42" }));
+    });
+    expect(editorReloadResultMock).toHaveBeenCalledTimes(2);
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(null);
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    await openEditor();
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+  });
+
+  it("列表发布了更新的修订、身份或角色变化后，再次打开编辑器不再沿用重新加载的节点", async () => {
+    const user = userEvent.setup();
+    getNodeMock.mockResolvedValue(revisedNode(REVISION_B));
+    const updateNode = vi.fn().mockRejectedValue(new Error("stop"));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode });
+
+    const view = renderNodesPage();
+    const reloadThenClose = async () => {
+      await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+      const reloads = editorReloadResultMock.mock.calls.length;
+      await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+      await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(reloads + 1));
+      await user.click(screen.getByRole("button", { name: "Close editor" }));
+    };
+    const reopenAndSave = async () => {
+      await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+      const saves = updateNode.mock.calls.length;
+      await user.click(screen.getByRole("button", { name: "保存并测试" }));
+      await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(saves + 1));
+      await user.click(screen.getByRole("button", { name: "Close editor" }));
+      return updateNode.mock.calls[saves]?.[1];
+    };
+
+    // The inventory moved past the stale row (another save landed): its row wins over the reload.
+    await reloadThenClose();
+    nodesRef.current.nodes = [revisedNode(REVISION_C)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_C });
+
+    // A token change discards the reload.
+    nodesRef.current.nodes = [revisedNode(REVISION_A)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await reloadThenClose();
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_A });
+
+    // So does a role round trip under the same token.
+    await reloadThenClose();
+    rerenderAuth(view, { role: "operator", token: "next-token" });
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_A });
+  });
+
+  it("保存成功后自动测试进行中，卡片保留写入响应带回的已完成测试结论", async () => {
+    const user = userEvent.setup();
+    const pendingProbe = createDeferred<NodeConnectionProbeOutcome>();
+    const testNodeConnection = vi.fn(() => pendingProbe.promise);
+    const updateNode = vi.fn(async (nodeId: number) => {
+      // The write response carries the recorded evidence, which the inventory publishes as the node's row;
+      // the raw status a legacy writer may have reset does not replace it.
+      nodesRef.current.nodes = [
+        revisedNode(REVISION_B, { status: "offline", connectionTest: { status: "online", current: false } }),
+      ];
+      return { id: nodeId, revision: REVISION_B };
+    });
+    createContext({
+      nodes: [revisedNode(REVISION_A, { connectionTest: { status: "online", current: true } })],
+      updateNode,
+      testNodeConnection,
+    });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledWith(1, { expectedRevision: REVISION_B }));
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    expect(within(card).getByText("测试通过")).toBeInTheDocument();
+    expect(within(card).getByText("使用此前的连接设置测试")).toBeInTheDocument();
+    expect(within(card).queryByText("尚未进行连接测试")).not.toBeInTheDocument();
+
+    await act(async () => {
+      pendingProbe.resolve({ ok: true, message: "连接成功" });
+    });
+  });
+
+  it("计数、筛选与搜索以最近测试结论为准，原始状态与之矛盾时不被采用", () => {
+    createContext({
+      globalSearch: "offline",
+      nodes: [
+        revisedNode(REVISION_A, { status: "online", connectionTest: { status: "offline", current: false } }),
+        revisedNode(REVISION_B, { id: 2, name: "node-dr-2", host: "node-dr-2.example.com", ip: "10.0.0.2", address: "10.0.0.2", status: "warning", tags: ["dr"] }),
+      ],
+    });
+
+    renderNodesPage();
+
+    expect(screen.getByText("最近测试通过: 0")).toBeInTheDocument();
+    expect(screen.getByText("最近测试未通过: 2")).toBeInTheDocument();
+    // Only the node whose latest test failed matches "offline"; its raw "online" is not searched.
+    expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument();
+  });
+
+  it("已修订但从未测试的节点单独计为未测试，不计入通过或未通过，状态排序排在最后", () => {
+    createContext({
+      nodes: [
+        // No probe yet: the raw status a new node starts with is not a failed test.
+        revisedNode(REVISION_A, { name: "node-a-untested", status: "offline", lastSeenAt: "-" }),
+        revisedNode(REVISION_B, { id: 2, name: "node-b-passed", status: "online", connectionTest: { status: "online", current: true } }),
+        revisedNode(REVISION_C, { id: 3, name: "node-c-failed", status: "online", connectionTest: { status: "offline", current: true } }),
+      ],
+    });
+
+    renderNodesPage();
+
+    expect(screen.getByText("最近测试通过: 1")).toBeInTheDocument();
+    expect(screen.getByText("最近测试未通过: 1")).toBeInTheDocument();
+    const cards = screen.getAllByLabelText(/^节点卡片 /);
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "节点卡片 node-c-failed",
+      "节点卡片 node-b-passed",
+      "节点卡片 node-a-untested",
+    ]);
+    expect(within(cards[2]).getByText("未测试")).toBeInTheDocument();
+  });
+
+  it("可按未测试筛选，关键词也匹配未测试的状态码与显示文字", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.status", "untested");
+    createContext({
+      nodes: [
+        revisedNode(REVISION_A, { name: "node-fresh", status: "offline", lastSeenAt: "-" }),
+        revisedNode(REVISION_B, { id: 2, name: "node-b-passed", status: "online", connectionTest: { status: "online", current: true } }),
+      ],
+    });
+
+    const view = renderNodesPage();
+    expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument();
+    expect(screen.getByLabelText("节点卡片 node-fresh")).toBeInTheDocument();
+    expect(screen.queryByLabelText("节点卡片 node-b-passed")).not.toBeInTheDocument();
+    view.unmount();
+
+    window.localStorage.setItem("xirang.nodes.status", "all");
+    for (const keyword of ["untested", "未测试"]) {
+      const searchView = renderNodesPage();
+      const search = screen.getByRole("textbox", { name: "节点关键词筛选" });
+      await user.clear(search);
+      await user.type(search, keyword);
+      await waitFor(() => expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument());
+      expect(screen.getByLabelText("节点卡片 node-fresh")).toBeInTheDocument();
+      searchView.unmount();
+    }
   });
 
   it("节点页提供 Fleet Doctor 入口并展示诊断结果", async () => {
@@ -1929,8 +2316,8 @@ describe("NodesPage", () => {
 
   it("新增保存返回前身份往返后不提示、不测试", async () => {
     const user = userEvent.setup();
-    const pendingSave = createDeferred<number>();
-    const createNode = vi.fn<(input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>>(() => pendingSave.promise);
+    const pendingSave = createDeferred<NodeSaveResult | null>();
+    const createNode = vi.fn<(input: NewNodeInput, isCurrent?: () => boolean) => Promise<NodeSaveResult | null>>(() => pendingSave.promise);
     const testNodeConnection = vi.fn();
     createContext({ createNode, testNodeConnection });
 
@@ -1948,7 +2335,7 @@ describe("NodesPage", () => {
     expect(saveStillCurrent()).toBe(false);
 
     await act(async () => {
-      pendingSave.resolve(9);
+      pendingSave.resolve({ id: 9 });
     });
 
     expect(testNodeConnection).not.toHaveBeenCalled();
@@ -1958,8 +2345,8 @@ describe("NodesPage", () => {
 
   it("更新保存失败返回前换 token 后不报错", async () => {
     const user = userEvent.setup();
-    const pendingSave = createDeferred<void>();
-    const updateNode = vi.fn<(id: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>>(() => pendingSave.promise);
+    const pendingSave = createDeferred<NodeSaveResult | null>();
+    const updateNode = vi.fn<(id: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<NodeSaveResult | null>>(() => pendingSave.promise);
     const testNodeConnection = vi.fn();
     createContext({ updateNode, testNodeConnection });
 
@@ -1986,7 +2373,7 @@ describe("NodesPage", () => {
   it("保存后的连接测试返回时身份已变则不展示结果", async () => {
     const user = userEvent.setup();
     const pendingTest = createDeferred<NodeConnectionProbeOutcome>();
-    const createNode = vi.fn().mockResolvedValue(9);
+    const createNode = vi.fn().mockResolvedValue({ id: 9 });
     const testNodeConnection = vi.fn(() => pendingTest.promise);
     createContext({ createNode, testNodeConnection });
 
@@ -2107,7 +2494,7 @@ describe("NodesPage", () => {
 
   it("CSV 文件读取期间身份往返后不再导入", async () => {
     const pendingText = createDeferred<string>();
-    const createNode = vi.fn().mockResolvedValue(8);
+    const createNode = vi.fn().mockResolvedValue({ id: 8 });
     createContext({ createNode });
     const view = renderNodesPage();
     chooseCsvFile(new DeferredTextFile(pendingText.promise));
@@ -2125,10 +2512,10 @@ describe("NodesPage", () => {
   });
 
   it("CSV 导入中途身份失效后不继续下一行也不提示", async () => {
-    const pendingRow = createDeferred<number>();
+    const pendingRow = createDeferred<NodeSaveResult | null>();
     const createNode = vi.fn()
       .mockImplementationOnce(() => pendingRow.promise)
-      .mockResolvedValue(5);
+      .mockResolvedValue({ id: 5 });
     createContext({ createNode });
     const view = renderNodesPage();
     const csv = [
@@ -2146,7 +2533,7 @@ describe("NodesPage", () => {
     rerenderAuth(view, { role: "admin", token: "next-token" });
     expect(importStillCurrent()).toBe(false);
     await act(async () => {
-      pendingRow.resolve(4);
+      pendingRow.resolve({ id: 4 });
     });
 
     expect(createNode).toHaveBeenCalledTimes(1);
@@ -2156,7 +2543,7 @@ describe("NodesPage", () => {
 
   it("CSV 文件读取期间卸载后不再导入", async () => {
     const pendingText = createDeferred<string>();
-    const createNode = vi.fn().mockResolvedValue(8);
+    const createNode = vi.fn().mockResolvedValue({ id: 8 });
     createContext({ createNode });
     const view = renderNodesPage();
     chooseCsvFile(new DeferredTextFile(pendingText.promise));

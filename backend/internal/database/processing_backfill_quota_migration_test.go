@@ -73,7 +73,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 		if err := RunMigrations(f.recoveryWorkerGorm(t, db), f.engine); err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationVersion(t, m, 100)
+		assertMigrationVersion(t, m, latestMigrationVersion)
 	})
 	t.Run("UnusedDownAndReupgrade", func(t *testing.T) {
 		m, db := f.openAt(t, 98)

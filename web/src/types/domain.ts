@@ -218,6 +218,28 @@ export interface NodeRecord {
    * list reads never do.
    */
   probeToken?: string;
+  /**
+   * Opaque revision of the node's persisted configuration. Editors send the revision they opened as
+   * `expectedRevision`, so a save from an older form cannot overwrite later changes. Legacy servers omit it.
+   */
+  revision?: string;
+  /**
+   * Outcome of the latest completed connection test. `current` is false once the connection settings or
+   * credential changed after that test, so the outcome is history rather than evidence about the
+   * current configuration. Omitted when no applied outcome is recorded.
+   */
+  connectionTest?: NodeConnectionTest;
+}
+
+export interface NodeConnectionTest {
+  status: "online" | "offline";
+  current: boolean;
+}
+
+/** A committed node write: the node's id and the configuration revision it produced (legacy servers and demo omit it). */
+export interface NodeSaveResult {
+  id: number;
+  revision?: string;
 }
 
 export type NodeDoctorCheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -858,6 +880,8 @@ export interface NewNodeInput {
   expiryDate?: string;
   backupDir?: string;
   useSudo?: boolean;
+  /** Revision the editor opened; a mismatch is refused as `node_revision_conflict`. Update only. */
+  expectedRevision?: string;
 }
 
 /** Ordinary password login: a main session or a pending second-factor step. */

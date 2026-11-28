@@ -208,7 +208,7 @@ describe("NodesPage confirm lifetime", () => {
   }
 
   it("确认密钥与授权根后逐行创建，并按实际结果汇总", async () => {
-    const createNode = vi.fn().mockResolvedValueOnce(-1).mockResolvedValueOnce(12);
+    const createNode = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 12 });
     nodesRef.current.createNode = createNode;
     const { user, dialog } = await openCsvConfirm("existing,node-a\ninvalid,node-b,root,0\nnew,node-c");
 

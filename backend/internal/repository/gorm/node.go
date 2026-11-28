@@ -12,6 +12,7 @@ import (
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodeprobe"
 	"xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
 )
@@ -66,17 +67,14 @@ func (r *NodeRepository) List(ctx context.Context) ([]model.Node, error) {
 
 // Create inserts a new node.
 func (r *NodeRepository) Create(ctx context.Context, node *model.Node) error {
-	if node.SSHKeyID == nil || *node.SSHKeyID == 0 {
-		return apperr.WrapDBError(r.db.WithContext(ctx).Create(node).Error)
-	}
-	return r.withPinnedSSHKey(ctx, node, false, false, func(tx *gorm.DB, _ *model.Node) error {
+	return r.withPinnedSSHKey(ctx, node, false, nil, func(tx *gorm.DB, _ *model.Node) error {
 		return tx.Create(node).Error
 	})
 }
 
-// withPinnedSSHKey fences node writes against key rotation. Updates lock the
-// node row before the key; timestamp updates read their projection there too.
-func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node, update, readTimes bool, write func(*gorm.DB, *model.Node) error) error {
+// withPinnedSSHKey locks the node before the selected key, and reads the
+// trigger-updated response while those locks still protect the transaction.
+func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node, update bool, prepare func(*model.Node) error, write func(*gorm.DB, *model.Node) error) error {
 	var options *sql.TxOptions
 	if r.db.Name() == "postgres" {
 		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
@@ -94,11 +92,12 @@ func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node,
 		}
 		var existing model.Node
 		if update {
-			fields := []string{"id"}
-			if readTimes {
-				fields = append(fields, "maintenance_start", "maintenance_end", "expiry_date")
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, node.ID).Error; err != nil {
+				return err
 			}
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(fields).First(&existing, node.ID).Error; err != nil {
+		}
+		if prepare != nil {
+			if err := prepare(&existing); err != nil {
 				return err
 			}
 		}
@@ -111,39 +110,73 @@ func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node,
 				return err
 			}
 		}
-		return write(tx, &existing)
+		if err := write(tx, &existing); err != nil {
+			return err
+		}
+		var saved model.Node
+		if err := tx.Preload("SSHKey").First(&saved, node.ID).Error; err != nil {
+			return err
+		}
+		// Migrated databases always populate the revision. AutoMigrate-only
+		// fixtures do not have the probe state table or revision triggers.
+		if update && saved.ConfigRevision != "" {
+			nodes := []model.Node{saved}
+			if _, err := nodeprobe.LoadEvidence(tx, nodes); err != nil {
+				return err
+			}
+			saved = nodes[0]
+		}
+		*node = saved
+		return nil
 	}, options)
 	return apperr.WrapDBError(err)
 }
 
 // Update writes configuration fields without overwriting probe or backup results.
 func (r *NodeRepository) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
-	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "Password", "PrivateKey", "SSHKeyID", "Tags", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
+	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "SSHKeyID", "Tags", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
 	if options.UpdateStatus {
 		fields = append(fields, "Status")
 	}
 	if options.UpdateBasePath {
 		fields = append(fields, "BasePath")
 	}
-	write := func(tx *gorm.DB, existing *model.Node) error {
+	prepare := func(existing *model.Node) error {
+		if options.ExpectedRevision != nil && *options.ExpectedRevision != existing.ConfigRevision {
+			return repository.ErrNodeRevisionConflict
+		}
+		start, end, expiry := captureNodeTime(existing.MaintenanceStart), captureNodeTime(existing.MaintenanceEnd), captureNodeTime(existing.ExpiryDate)
+		password, privateKey := existing.Password, existing.PrivateKey
+		if options.Merge != nil {
+			if err := options.Merge(existing); err != nil {
+				return err
+			}
+			*node = *existing
+		}
 		if options.ApplyTimes != nil {
-			start, end, expiry := captureNodeTime(existing.MaintenanceStart), captureNodeTime(existing.MaintenanceEnd), captureNodeTime(existing.ExpiryDate)
 			if err := options.ApplyTimes(existing); err != nil {
 				return err
 			}
-			if start.changed(existing.MaintenanceStart) {
-				fields = append(fields, "MaintenanceStart")
-				node.MaintenanceStart = existing.MaintenanceStart
-			}
-			if end.changed(existing.MaintenanceEnd) {
-				fields = append(fields, "MaintenanceEnd")
-				node.MaintenanceEnd = existing.MaintenanceEnd
-			}
-			if expiry.changed(existing.ExpiryDate) {
-				fields = append(fields, "ExpiryDate")
-				node.ExpiryDate = existing.ExpiryDate
-			}
+			node.MaintenanceStart, node.MaintenanceEnd, node.ExpiryDate = existing.MaintenanceStart, existing.MaintenanceEnd, existing.ExpiryDate
 		}
+		if start.changed(existing.MaintenanceStart) {
+			fields = append(fields, "MaintenanceStart")
+		}
+		if end.changed(existing.MaintenanceEnd) {
+			fields = append(fields, "MaintenanceEnd")
+		}
+		if expiry.changed(existing.ExpiryDate) {
+			fields = append(fields, "ExpiryDate")
+		}
+		if node.Password != password {
+			fields = append(fields, "Password")
+		}
+		if node.PrivateKey != privateKey {
+			fields = append(fields, "PrivateKey")
+		}
+		return nil
+	}
+	write := func(tx *gorm.DB, _ *model.Node) error {
 		result := tx.Model(node).Select(fields).Updates(node)
 		if result.Error != nil {
 			return result.Error
@@ -153,10 +186,7 @@ func (r *NodeRepository) Update(ctx context.Context, node *model.Node, options r
 		}
 		return nil
 	}
-	if options.ApplyTimes != nil || (node.SSHKeyID != nil && *node.SSHKeyID > 0) {
-		return r.withPinnedSSHKey(ctx, node, true, options.ApplyTimes != nil, write)
-	}
-	return apperr.WrapDBError(write(r.db.WithContext(ctx), nil))
+	return r.withPinnedSSHKey(ctx, node, true, prepare, write)
 }
 
 type nodeTimeSnapshot struct {

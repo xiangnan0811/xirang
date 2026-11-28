@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, formatTime } from "./core";
-import { __test__, createNodesApi, isNodeProbeStaleError } from "./nodes-api";
+import { __test__, createNodesApi, isNodeProbeStaleError, isNodeRevisionConflictError } from "./nodes-api";
 
 const PROBE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const REVISION = "0123456789abcdef0123456789abcdef";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -539,5 +540,71 @@ describe("nodes api", () => {
     expect(isNodeProbeStaleError(stale)).toBe(true);
     expect(isNodeProbeStaleError(changed)).toBe(false);
     expect(isNodeProbeStaleError(new Error("node_probe_stale"))).toBe(false);
+  });
+
+  it("maps the configuration revision and the latest test outcome with its applicability", () => {
+    const node = __test__.mapNode({
+      id: 1,
+      name: "a",
+      host: "h",
+      status: "offline",
+      revision: REVISION,
+      connection_test: { status: "online", current: false },
+    });
+    expect(node).toMatchObject({ status: "offline", revision: REVISION, connectionTest: { status: "online", current: false } });
+
+    const legacy = __test__.mapNode({ id: 1, name: "a", host: "h", revision: "", connection_test: null });
+    expect(legacy).not.toHaveProperty("revision");
+    expect(legacy).not.toHaveProperty("connectionTest");
+    for (const connectionTest of [{ status: "warning", current: true }, { status: "online" }, {}]) {
+      expect(__test__.mapNode({ id: 1, name: "a", host: "h", connection_test: connectionTest })).not.toHaveProperty("connectionTest");
+    }
+  });
+
+  it("sends the opened revision with an update only when the editor knows one", async () => {
+    const nodeBody = JSON.stringify({ code: 0, message: "ok", data: { node: { id: 7, name: "db-1", host: "10.0.0.7", revision: REVISION } } });
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody))
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody));
+    const input = { name: "db-1", host: "10.0.0.7", port: 22, username: "root", authType: "key" as const, tags: "" };
+
+    await expect(api.updateNode("token-node", 7, { ...input, expectedRevision: REVISION })).resolves.toMatchObject({ node: { revision: REVISION } });
+    await api.updateNode("token-node", 7, input);
+
+    const conditional = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(conditional.expected_revision).toBe(REVISION);
+    const legacy = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(legacy).not.toHaveProperty("expected_revision");
+  });
+
+  it("adds expected_revision to a test-connection request only when asked", async () => {
+    const envelope = () => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { ok: true, message: "alive" } }));
+    fetchMock.mockResolvedValueOnce(envelope()).mockResolvedValueOnce(envelope());
+
+    await api.testNodeConnection("token-node", 7, { expectedRevision: REVISION });
+    await api.testNodeConnection("token-node", 7);
+
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[0]).toBe(`/api/v1/nodes/7/test-connection?expected_revision=${REVISION}`);
+    expect((fetchMock.mock.calls[1] as [string, RequestInit])[0]).toBe("/api/v1/nodes/7/test-connection");
+  });
+
+  it("recognizes only the node_revision_conflict refusal as a revision conflict", async () => {
+    const conflict = (errorCode: string) => createMockResponse(409, JSON.stringify({
+      code: 409,
+      message: "conflict",
+      data: { error_code: errorCode },
+    }));
+    fetchMock
+      .mockResolvedValueOnce(conflict("node_revision_conflict"))
+      .mockResolvedValueOnce(conflict("backup_dir_conflict"));
+    const input = { name: "db-1", host: "10.0.0.7", port: 22, username: "root", authType: "key" as const, tags: "", expectedRevision: REVISION };
+
+    const stale = await api.updateNode("token-node", 7, input).catch((error: unknown) => error);
+    const other = await api.updateNode("token-node", 7, input).catch((error: unknown) => error);
+
+    expect(isNodeRevisionConflictError(stale)).toBe(true);
+    expect(isNodeProbeStaleError(stale)).toBe(false);
+    expect(isNodeRevisionConflictError(other)).toBe(false);
+    expect(isNodeRevisionConflictError(new Error("node_revision_conflict"))).toBe(false);
   });
 });

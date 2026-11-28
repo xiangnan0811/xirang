@@ -7,7 +7,13 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { getNodeStatusMeta } from "@/lib/status";
+import { NodeConnectionEvidenceNote } from "@/components/node-connection-evidence";
+import {
+  describeNodeConnectionEvidence,
+  formatNodeConnectionLatency,
+  getNodeLastTestStatus,
+  getNodeStatusMeta,
+} from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { NodeActionsMenu } from "@/pages/nodes-page.actions-menu";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
@@ -58,10 +64,11 @@ const NodeCard = React.memo(function NodeCard({
 }: NodeCardProps) {
   const { t } = useTranslation();
   const nameId = useId();
-  const status = getNodeStatusMeta(node.status);
+  const status = getNodeStatusMeta(getNodeLastTestStatus(node));
   const keyLabel = node.keyId
     ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
     : t("common.keyUnbound");
+  const evidence = describeNodeConnectionEvidence(node);
 
   return (
     <article
@@ -83,9 +90,12 @@ const NodeCard = React.memo(function NodeCard({
           />
           {t("nodes.selectLabel")}
         </label>
-        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
-          <Badge tone={status.variant}>{status.label}</Badge>
-          <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
+        <div className="flex min-w-0 flex-col items-end gap-1">
+          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+            <Badge tone={status.variant}>{status.label}</Badge>
+            <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
+          </div>
+          <NodeConnectionEvidenceNote evidence={evidence} className="max-w-48 justify-end text-right" />
         </div>
       </div>
 
@@ -111,11 +121,11 @@ const NodeCard = React.memo(function NodeCard({
             : t("nodes.authPassword")}
         </p>
         <p>
-          {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
+          {evidence.testedAt
+            ? t("nodes.lastConnectionLabel", { time: evidence.testedAt })
+            : t("nodes.lastConnectionNever")}
         </p>
-        <p>
-          {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
-        </p>
+        <p>{t("nodes.connectionLatency", { latency: formatNodeConnectionLatency(evidence) })}</p>
         <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
         <p className="break-words">
           {t("nodes.tagsLabel", { tags: node.tags.length ? node.tags.join(" / ") : "-" })}

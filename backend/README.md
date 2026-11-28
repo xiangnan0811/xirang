@@ -33,16 +33,16 @@ Worker 工具链 v3 的输入身份、保留镜像引用及 v1 签名闭包的�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000100_node_probe_generation`。
+当前迁移版本：`000101_node_config_revision`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000100_node_probe_generation.up.sql`
-- `internal/database/migrations/sqlite/000100_node_probe_generation.down.sql`
-- `internal/database/migrations/postgres/000100_node_probe_generation.up.sql`
-- `internal/database/migrations/postgres/000100_node_probe_generation.down.sql`
+- `internal/database/migrations/sqlite/000101_node_config_revision.up.sql`
+- `internal/database/migrations/sqlite/000101_node_config_revision.down.sql`
+- `internal/database/migrations/postgres/000101_node_config_revision.up.sql`
+- `internal/database/migrations/postgres/000101_node_config_revision.down.sql`
 
-节点及 SSH 密钥的连接身份变更由数据库生成新的随机代次；节点探测的准入和应用序号保存在独立表中。升级前必须停止并排空旧版写入者，不能混跑旧版和新版。降级前必须停止并排空新版写入者及进行中的探测；降级会丢弃探测排序元数据，重新升级会为现有节点和密钥生成新的身份代次。
+节点配置由数据库生成随机修订号，连接测试结果保存最近应用的状态及其身份依据。升级前必须停止并排空旧版写入者，不能混跑旧版和新版。降级前必须停止并排空新版写入者及进行中的探测；降级会丢弃配置修订号和测试结果状态，但保留 v100 探测排序元数据，重新升级会为现有节点生成新的配置修订号。
 
 `000098_processing_shared_derived_blobs` 保留独立上传／产物集共享物理 blob 的关系、迁移与历史；出现重复 staging ID 或 manifest 摘要后，该版本的降级保护仍独立生效，不因配额迁移可回退而解除。
 

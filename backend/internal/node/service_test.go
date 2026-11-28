@@ -9,6 +9,7 @@ import (
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodeprobe"
 	"xirang/backend/internal/repository"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/secure"
@@ -260,6 +261,88 @@ func TestNodeBasePathValidationAndLegacyRetention(t *testing.T) {
 		updated, _, err = concurrent.Update(ctx, created.ID, input)
 		if err != nil || updated.BasePath != "/repaired" {
 			t.Fatalf("concurrent path repair (echo=%v): %#v, %v", echoed, updated, err)
+		}
+	}
+}
+
+type changeNodeBeforeLockedUpdate struct {
+	repository.NodeRepository
+	db *gorm.DB
+}
+
+func (r *changeNodeBeforeLockedUpdate) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
+	if err := r.db.WithContext(ctx).Table("nodes").Where("id = ?", node.ID).Updates(map[string]any{
+		"backup_dir": "new-backup", "archived": true, "use_sudo": true,
+		"config_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}).Error; err != nil {
+		return err
+	}
+	return r.NodeRepository.Update(ctx, node, options)
+}
+
+func TestNodeUpdateRevisionAndLockedDefaults(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db, err := gorm.Open(sqlite.Open("file:node_revision_service?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &nodeprobe.State{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repo := gormrepo.NewNodeRepository(db)
+	original := &model.Node{Name: "node", Host: "node.example", Username: "root", AuthType: "password", Password: "secret", BackupDir: "old-backup"}
+	if err := repo.Create(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	service := NewNodeService(&changeNodeBeforeLockedUpdate{NodeRepository: repo, db: db})
+	stale := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	input := CreateNodeInput{Name: "node", Host: "invalid/host", Username: "root", ExpectedRevision: &stale}
+	if _, _, err := service.Update(ctx, original.ID, input); !errors.Is(err, repository.ErrNodeRevisionConflict) {
+		t.Fatalf("stale revision did not precede validation: %v", err)
+	}
+	input.ExpectedRevision = nil
+	input.Host = "node.example"
+	updated, oldBackup, err := service.Update(ctx, original.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldBackup != "new-backup" || updated.BackupDir != "new-backup" || !updated.Archived || !updated.UseSudo || updated.Password != "secret" {
+		t.Fatalf("locked defaults were not retained: old=%q node=%#v", oldBackup, updated.Sanitized())
+	}
+	plainService := NewNodeService(repo)
+	if _, _, err := plainService.Update(ctx, original.ID+100, CreateNodeInput{Status: "invalid"}); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("invalid status on missing node: %v", err)
+	}
+	zero := uint(0)
+	keyInput := CreateNodeInput{Name: "key-node", Host: "node.example", Username: "root", AuthType: "key", SSHKeyID: &zero}
+	if _, err := plainService.Create(ctx, keyInput); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("create accepted zero SSH key ID: %v", err)
+	}
+	keyInput.Name = "node"
+	if _, _, err := plainService.Update(ctx, original.ID, keyInput); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("update accepted zero SSH key ID: %v", err)
+	}
+}
+
+func TestValidateExpectedRevision(t *testing.T) {
+	valid := "0123456789abcdef0123456789abcdef"
+	if err := ValidateExpectedRevision(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateExpectedRevision(&valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", "0123456789ABCDEF0123456789ABCDEF", "0123456789abcdef0123456789abcdeg"} {
+		if err := ValidateExpectedRevision(&invalid); !errors.Is(err, apperr.ErrValidation) {
+			t.Fatalf("invalid revision %q: %v", invalid, err)
 		}
 	}
 }

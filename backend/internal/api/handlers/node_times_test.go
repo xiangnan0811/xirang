@@ -30,8 +30,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// pauseNodeTimeUpdate pauses the first repository write after the service has read
-// the node, leaving the real repository to perform both writes and validation.
+// pauseNodeTimeUpdate pauses the first repository write, leaving the real
+// repository to perform both writes and validation under its node lock.
 type pauseNodeTimeUpdate struct {
 	repository.NodeRepository
 	claimed atomic.Bool

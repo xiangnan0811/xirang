@@ -936,6 +936,11 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 			return migrationSchemaDriftError(version, err.Error())
 		}
 	}
+	if version >= 101 {
+		if err := validateNodeConfigRevisionSchema(db, dbType); err != nil {
+			return migrationSchemaDriftError(version, err.Error())
+		}
+	}
 
 	return nil
 }

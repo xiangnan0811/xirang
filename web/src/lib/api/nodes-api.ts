@@ -1,4 +1,4 @@
-import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionTest, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
 import { ApiError, parseNumericId, request, formatTime } from "./core";
 import { finiteNumber } from "./number-utils";
 
@@ -24,6 +24,10 @@ type NodeResponse = {
   use_sudo?: boolean;
   /** Opaque identity of the latest applied connection test; omitted unless it still matches the node's current identity. */
   probe_token?: string | null;
+  /** Opaque revision of the persisted configuration; legacy servers omit it. */
+  revision?: string | null;
+  /** Latest completed connection test outcome and whether it still describes the current connection settings. */
+  connection_test?: { status?: string; current?: boolean } | null;
 };
 
 type NodeBatchDeleteResponse = {
@@ -153,8 +157,17 @@ function parseBackupInstant(raw: string | null | undefined): NonNullable<NodeRec
   };
 }
 
+function mapConnectionTest(raw: NodeResponse["connection_test"]): NodeConnectionTest | undefined {
+  if (!raw || (raw.status !== "online" && raw.status !== "offline") || typeof raw.current !== "boolean") {
+    return undefined;
+  }
+  return { status: raw.status, current: raw.current };
+}
+
 function mapNode(row: NodeResponse): NodeRecord {
   const probeToken = typeof row.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : undefined;
+  const revision = typeof row.revision === "string" && row.revision.length > 0 ? row.revision : undefined;
+  const connectionTest = mapConnectionTest(row.connection_test);
   const lastBackupInstant = parseBackupInstant(row.last_backup_at);
   return {
     id: row.id,
@@ -181,6 +194,8 @@ function mapNode(row: NodeResponse): NodeRecord {
     backupDir: row.backup_dir || '',
     useSudo: row.use_sudo ?? false,
     ...(probeToken ? { probeToken } : {}),
+    ...(revision ? { revision } : {}),
+    ...(connectionTest ? { connectionTest } : {}),
   };
 }
 
@@ -214,8 +229,7 @@ function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
 
 export const __test__ = { mapNodeDoctorResult, mapNode };
 
-/** Trust was refused because the node changed or a newer connection test applied after the reviewed one. */
-export function isNodeProbeStaleError(error: unknown): boolean {
+function isNodeConflict(error: unknown, errorCode: string): boolean {
   if (!(error instanceof ApiError) || (error.status !== 409 && error.httpStatus !== 409)) {
     return false;
   }
@@ -224,7 +238,17 @@ export function isNodeProbeStaleError(error: unknown): boolean {
     return false;
   }
   const data = detail.data;
-  return Boolean(data && typeof data === "object" && "error_code" in data && data.error_code === "node_probe_stale");
+  return Boolean(data && typeof data === "object" && "error_code" in data && data.error_code === errorCode);
+}
+
+/** Trust was refused because the node changed or a newer connection test applied after the reviewed one. */
+export function isNodeProbeStaleError(error: unknown): boolean {
+  return isNodeConflict(error, "node_probe_stale");
+}
+
+/** The update was refused before any change because the node was saved again after the editor opened it. */
+export function isNodeRevisionConflictError(error: unknown): boolean {
+  return isNodeConflict(error, "node_revision_conflict");
 }
 
 function isHostKeyIssueCode(value: unknown): value is NodeHostKeyIssueCode {
@@ -292,6 +316,7 @@ export function createNodesApi() {
       return mapNode(row);
     },
 
+    /** `expectedRevision` (the revision the editor opened) makes the server refuse the write if the node changed since. */
     async updateNode(token: string, nodeId: number, input: NewNodeInput): Promise<NodeUpdateResult> {
       const payload = await request<NodeUpdateResponse>(`/nodes/${nodeId}`, {
         method: "PUT",
@@ -313,6 +338,7 @@ export function createNodesApi() {
           maintenance_start: input.maintenanceStart ?? undefined,
           maintenance_end: input.maintenanceEnd ?? undefined,
           expiry_date: input.expiryDate ?? undefined,
+          expected_revision: input.expectedRevision,
         }
       });
       if (!payload?.node || typeof payload.node.id !== "number" || !payload.node.name || !payload.node.host) {
@@ -347,8 +373,19 @@ export function createNodesApi() {
       };
     },
 
-    async testNodeConnection(token: string, nodeId: number): Promise<NodeConnectionTestResult> {
-      const row = await request<TestNodeResponse>(`/nodes/${nodeId}/test-connection`, {
+    /**
+     * `expectedRevision` admits the test only while the node still has that committed revision; otherwise the
+     * server answers with a stale result before dialing. Only the automatic post-save test sends it.
+     */
+    async testNodeConnection(
+      token: string,
+      nodeId: number,
+      options?: { expectedRevision?: string },
+    ): Promise<NodeConnectionTestResult> {
+      const query = options?.expectedRevision
+        ? `?expected_revision=${encodeURIComponent(options.expectedRevision)}`
+        : "";
+      const row = await request<TestNodeResponse>(`/nodes/${nodeId}/test-connection${query}`, {
         method: "POST",
         token
       });

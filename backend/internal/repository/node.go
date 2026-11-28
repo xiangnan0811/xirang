@@ -13,11 +13,18 @@ var ErrNodeSSHKeyNotFound = errors.New("node SSH key reference not found")
 // ErrNodeDrillTargetInUse reports a node targeted by an enabled drill.
 var ErrNodeDrillTargetInUse = errors.New("node is an enabled drill target")
 
+// ErrNodeRevisionConflict reports that the node changed since it was read.
+var ErrNodeRevisionConflict = errors.New("node revision conflict")
+
 // NodeUpdateOptions controls which optional node fields are written.
 type NodeUpdateOptions struct {
-	UpdateStatus   bool
-	UpdateBasePath bool
-	ApplyTimes     func(*model.Node) error
+	UpdateStatus     bool
+	UpdateBasePath   bool
+	ExpectedRevision *string
+	// Merge runs against the locked row after revision comparison and before
+	// the referenced key is pinned. It must not perform database operations.
+	Merge      func(*model.Node) error
+	ApplyTimes func(*model.Node) error
 }
 
 // NodeRepository defines the data access interface for Node.

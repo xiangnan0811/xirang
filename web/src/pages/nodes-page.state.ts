@@ -6,6 +6,7 @@ import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
 import { compareLastBackupDesc, nodeStatusPriority } from "@/pages/nodes-page.utils";
+import { getNodeLastTestStatus, type NodeLastTestStatus } from "@/lib/status";
 import {
   buildNodesCSV,
   CSV_IMPORT_BASE_PATH,
@@ -23,7 +24,7 @@ import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, TaskRecord } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeSaveResult, TaskRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { isNodeProbeStaleError } from "@/lib/api/nodes-api";
@@ -37,6 +38,9 @@ const tagStorageKey = "xirang.nodes.tag";
 const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
 const groupViewStorageKey = "xirang.nodes.groupView";
+
+// Status sort ranks problems first; a node without any test has nothing to surface and ranks below online.
+const lastTestStatusPriority: Record<NodeLastTestStatus, number> = { ...nodeStatusPriority, untested: 0 };
 
 type HostKeyIssueState = {
   nodeId: number;
@@ -132,7 +136,11 @@ export function useNodesPageState() {
   }, [cancelPending]);
   const [editorOpen, setEditorOpen] = useState(false);
   const nodeEditorOpenerRef = useRef<HTMLElement | null>(null);
+  // Every editor open or close starts a new page-side editor session; a reload requested by an earlier
+  // session may neither report to nor seed a later one. Identity resets are fenced by captureAuthLifetime.
+  const editorSessionRef = useRef(0);
   const handleEditorOpenChange = (open: boolean) => {
+    editorSessionRef.current += 1;
     setEditorOpen(open);
     if (!open) {
       setEditingNode(null);
@@ -183,6 +191,11 @@ export function useNodesPageState() {
 
   const [migrateSourceNode, setMigrateSourceNode] = useState<NodeRecord | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
+  // A successful explicit reload read the node after the inventory row went stale. Until the inventory publishes
+  // another revision for that node, a new edit session starts from the reloaded node, so a delayed or stale list
+  // read cannot reopen the editor on the revision that just conflicted. Open drafts keep their own snapshot.
+  const reloadedNodesRef = useRef(new Map<number, { node: NodeRecord; staleRevision: string | undefined }>());
+
   const [authIdentity, setAuthIdentity] = useState({ token, role });
   if (authIdentity.token !== token || authIdentity.role !== role) {
     const tokenChanged = authIdentity.token !== token;
@@ -211,14 +224,18 @@ export function useNodesPageState() {
   }
 
   useLayoutEffect(() => {
+    const reloadedNodes = reloadedNodesRef.current;
     roleRef.current = effectiveRole;
     authEpochRef.current += 1;
     mountedRef.current = true;
     hostKeyTrustOwnerRef.current = null;
     hostKeyTrustOperationRef.current += 1;
+    // Reloaded rows were read under the previous identity; none may seed an editor under this one.
+    reloadedNodes.clear();
     return () => {
       authEpochRef.current += 1;
       mountedRef.current = false;
+      reloadedNodes.clear();
       emergencyAbortRef.current?.abort();
       cancelPendingRef.current();
     };
@@ -250,6 +267,10 @@ export function useNodesPageState() {
   };
 
   const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
+  const latestNodesRef = useRef(nodes);
+  useLayoutEffect(() => {
+    latestNodesRef.current = nodes;
+  }, [nodes]);
 
   const validSelectedNodeIds = selectedNodeIds.filter((id) => nodeIdSet.has(id));
   if (validSelectedNodeIds.length !== selectedNodeIds.length) {
@@ -277,22 +298,29 @@ export function useNodesPageState() {
     let online = 0;
     let warning = 0;
     let offline = 0;
+    // Revised nodes with no recorded test have no outcome yet: neither passed nor failed.
+    let untested = 0;
     for (const node of nodes) {
-      if (node.status === "online") {
+      const status = getNodeLastTestStatus(node);
+      if (status === "online") {
         online += 1;
-      } else if (node.status === "warning") {
+      } else if (status === "warning") {
         warning += 1;
+      } else if (status === "untested") {
+        untested += 1;
       } else {
         offline += 1;
       }
     }
-    return { online, warning, offline };
+    return { online, warning, offline, untested };
   }, [nodes]);
 
   const filteredNodes = useMemo(() => {
     const searchKey = deferredKeyword.trim().toLowerCase();
     return nodes.filter((node) => {
-      if (statusFilter !== "all" && node.status !== statusFilter) {
+      // Counters, filter, search and sort follow the status the badges show (latest test evidence first).
+      const status = getNodeLastTestStatus(node);
+      if (statusFilter !== "all" && status !== statusFilter) {
         return false;
       }
       if (tagFilter !== "all" && !node.tags.includes(tagFilter)) {
@@ -302,8 +330,8 @@ export function useNodesPageState() {
         return true;
       }
       // 搜索框提示可按连接状态筛选，因此同时匹配状态码与当前语言下显示的状态文字。
-      const statusLabel = t(`status.node.${node.status}`);
-      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status} ${statusLabel}`.toLowerCase();
+      const statusLabel = t(`status.node.${status}`);
+      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${status} ${statusLabel}`.toLowerCase();
       return candidate.includes(searchKey);
     });
   }, [deferredKeyword, nodes, statusFilter, t, tagFilter]);
@@ -313,7 +341,7 @@ export function useNodesPageState() {
     list.sort((first, second) => {
       if (sortBy === "status") {
         const rankGap =
-          nodeStatusPriority[second.status] - nodeStatusPriority[first.status];
+          lastTestStatusPriority[getNodeLastTestStatus(second)] - lastTestStatusPriority[getNodeLastTestStatus(first)];
         if (rankGap !== 0) {
           return rankGap;
         }
@@ -361,7 +389,20 @@ export function useNodesPageState() {
     }
     nodeEditorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingNode(null);
-    setEditorOpen(true);
+    handleEditorOpenChange(true);
+  };
+
+  const latestKnownNode = (node: NodeRecord): NodeRecord => {
+    const reloaded = reloadedNodesRef.current.get(node.id);
+    if (!reloaded) {
+      return node;
+    }
+    if (node.revision === reloaded.staleRevision) {
+      return reloaded.node;
+    }
+    // The inventory moved past the stale revision: its row is at least as new as the reload.
+    reloadedNodesRef.current.delete(node.id);
+    return node;
   };
 
   const openEditDialog = (node: NodeRecord, opener?: EventTarget | null) => {
@@ -369,8 +410,8 @@ export function useNodesPageState() {
       return;
     }
     nodeEditorOpenerRef.current = dialogOpenerFromTarget(opener);
-    setEditingNode(node);
-    setEditorOpen(true);
+    setEditingNode(latestKnownNode(node));
+    handleEditorOpenChange(true);
   };
 
   // A host key issue describes one test of one node configuration; a newer test or a mutation of
@@ -456,29 +497,33 @@ export function useNodesPageState() {
     }
 
     const saveStillCurrent = captureAuthLifetime();
-    let savedNodeId: number;
+    let saved: NodeSaveResult;
 
     try {
       if (nodeId) {
-        savedNodeId = nodeId;
-        await updateNode(nodeId, input, saveStillCurrent, onInlineKeyCreated);
-        if (!saveStillCurrent()) {
+        // A revision conflict rejects here and reaches the editor, which keeps the draft; nothing was written,
+        // so no connection test follows.
+        const updated = await updateNode(nodeId, input, saveStillCurrent, onInlineKeyCreated);
+        if (!saveStillCurrent() || !updated) {
           return;
         }
+        saved = updated;
+        // The committed write supersedes any earlier reload of this node.
+        reloadedNodesRef.current.delete(updated.id);
         toast.success(t("nodes.nodeUpdated", { name: input.name }));
       } else {
-        savedNodeId = await createNode(input, saveStillCurrent, onInlineKeyCreated);
+        const created = await createNode(input, saveStillCurrent, onInlineKeyCreated);
         if (!saveStillCurrent()) {
           return;
         }
-        if (savedNodeId <= 0) {
+        if (!created || created.id <= 0) {
           throw new Error(t("console.actionRequestFailed", { action: t("nodes.actions.createNode") }));
         }
+        saved = created;
         toast.success(t("nodes.nodeCreated", { name: input.name }));
       }
 
-      setEditorOpen(false);
-      setEditingNode(null);
+      handleEditorOpenChange(false);
     } catch (error) {
       if (saveStillCurrent()) {
         throw error;
@@ -486,8 +531,16 @@ export function useNodesPageState() {
       return;
     }
 
+    // Test exactly the committed revision: if the node changes again before this test is admitted, the
+    // server answers stale instead of testing settings this save did not write. Legacy servers and demo
+    // return no revision and keep the unconditional test.
+    const savedNodeId = saved.id;
+    const savedRevision = saved.revision;
     const testOperation = startNodeTest(savedNodeId);
-    void testNodeConnection(savedNodeId).then((result) => {
+    const probe = savedRevision
+      ? testNodeConnection(savedNodeId, { expectedRevision: savedRevision })
+      : testNodeConnection(savedNodeId);
+    void probe.then((result) => {
       if (saveStillCurrent()) {
         presentProbeResult(savedNodeId, input.name, result, false);
       }
@@ -500,6 +553,48 @@ export function useNodesPageState() {
         finishNodeTest(testOperation);
       }
     });
+  };
+
+  // Explicit reload after a revision conflict: reads the saved node under the current token. Null once the
+  // admin lifetime or the editor session that requested it has ended; such a late read is dropped without
+  // reporting, remembering or refreshing. The editor additionally fences the result to its own session.
+  // A newer read is remembered for later edit sessions and the inventory is refreshed to catch up with it.
+  // Revisions are opaque, so when the inventory published another revision of this node while the read was
+  // outstanding, neither can be shown to be newer: the reload is refused, the draft stays and a retry reads again.
+  const reloadEditingNode = async (nodeId: number): Promise<NodeRecord | null> => {
+    if (roleRef.current !== "admin") {
+      return null;
+    }
+    if (!token) {
+      throw new Error(t("console.notLoggedIn"));
+    }
+    const authStillCurrent = captureAuthLifetime();
+    const editorSession = editorSessionRef.current;
+    const reloadStillCurrent = () =>
+      authStillCurrent() && roleRef.current === "admin" && editorSessionRef.current === editorSession;
+    const listedAtStart = latestNodesRef.current.find((candidate) => candidate.id === nodeId);
+    let node: NodeRecord;
+    try {
+      node = await apiClient.getNode(token, nodeId);
+    } catch (error) {
+      if (!reloadStillCurrent()) {
+        return null;
+      }
+      throw error;
+    }
+    if (!reloadStillCurrent()) {
+      return null;
+    }
+    const listed = latestNodesRef.current.find((candidate) => candidate.id === nodeId);
+    if (node.id !== nodeId || !listed || listed.revision === node.revision) {
+      return node;
+    }
+    if (!listedAtStart || listed.revision !== listedAtStart.revision) {
+      throw new Error(t("nodeEditor.reloadSavedNodeFailed"));
+    }
+    reloadedNodesRef.current.set(nodeId, { node, staleRevision: listed.revision });
+    void refreshNodes();
+    return node;
   };
 
   const handleTestConnection = async (nodeId: number) => {
@@ -893,7 +988,12 @@ export function useNodesPageState() {
       return;
     }
 
-    const outcome = await importCSVNodeRows(rows, key.id, createNode, importStillCurrent);
+    const outcome = await importCSVNodeRows(
+      rows,
+      key.id,
+      async (input, isCurrent) => (await createNode(input, isCurrent))?.id ?? -1,
+      importStillCurrent,
+    );
     if (outcome.status === "cancelled" || !importStillCurrent()) {
       return;
     }
@@ -1136,6 +1236,7 @@ export function useNodesPageState() {
     openCreateDialog,
     openEditDialog,
     handleSaveNode,
+    reloadEditingNode,
     handleTestConnection,
     openDoctor,
     onDeleteNode,

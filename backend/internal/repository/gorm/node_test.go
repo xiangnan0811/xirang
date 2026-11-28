@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodeprobe"
 	"xirang/backend/internal/repository"
 	"xirang/backend/internal/secure"
 
@@ -194,5 +195,67 @@ func TestNodeUpdateWritesBasePathOnlyWhenRequested(t *testing.T) {
 	stored, err = repo.FindByID(ctx, node.ID)
 	if err != nil || stored.BasePath != node.BasePath {
 		t.Fatalf("explicit path update failed: %#v, %v", stored, err)
+	}
+}
+
+func TestNodeRevisionConflictAndCredentialRetention(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db, err := gorm.Open(sqlite.Open("file:node_revision_write?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &nodeprobe.State{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER revision_insert AFTER INSERT ON nodes BEGIN UPDATE nodes SET config_revision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE id = NEW.id; END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER revision_name AFTER UPDATE OF name ON nodes WHEN NEW.name <> OLD.name BEGIN UPDATE nodes SET config_revision = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' WHERE id = NEW.id; END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repo := NewNodeRepository(db)
+	node := &model.Node{Name: "initial", Host: "node.example", Username: "root", AuthType: "password", Password: "secret", BackupDir: "initial"}
+	if err := repo.Create(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if node.ConfigRevision != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || node.Password != "secret" {
+		t.Fatalf("create returned incorrect saved row: %#v", node.Sanitized())
+	}
+	var ciphertext string
+	if err := db.Table("nodes").Select("password").Where("id = ?", node.ID).Scan(&ciphertext).Error; err != nil {
+		t.Fatal(err)
+	}
+	stale := "cccccccccccccccccccccccccccccccc"
+	merged := false
+	err = repo.Update(ctx, node, repository.NodeUpdateOptions{ExpectedRevision: &stale, Merge: func(current *model.Node) error {
+		merged = true
+		current.Name = "unexpected"
+		return nil
+	}})
+	if !errors.Is(err, repository.ErrNodeRevisionConflict) || merged {
+		t.Fatalf("stale update merged: merged=%v err=%v", merged, err)
+	}
+	expected := node.ConfigRevision
+	err = repo.Update(ctx, node, repository.NodeUpdateOptions{ExpectedRevision: &expected, Merge: func(current *model.Node) error {
+		current.Name = "changed"
+		return nil
+	}})
+	if err != nil || node.ConfigRevision != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" || node.Name != "changed" {
+		t.Fatalf("update returned incorrect saved row: %#v, %v", node.Sanitized(), err)
+	}
+	var after string
+	if err := db.Table("nodes").Select("password").Where("id = ?", node.ID).Scan(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ciphertext == "" || after != ciphertext {
+		t.Fatal("unchanged password was re-encrypted")
 	}
 }

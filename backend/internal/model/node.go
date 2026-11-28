@@ -37,33 +37,42 @@ func nodeTimeForResponse(value *time.Time) *time.Time {
 	return &utc
 }
 
+// NodeConnectionTest describes the last completed connection test and whether
+// it applies to the node's current connection settings.
+type NodeConnectionTest struct {
+	Status  string `json:"status"`
+	Current bool   `json:"current"`
+}
+
 type Node struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	Name               string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Host               string     `gorm:"size:255;not null" json:"host"`
-	Port               int        `gorm:"not null;default:22" json:"port"`
-	Username           string     `gorm:"size:128;not null" json:"username"`
-	AuthType           string     `gorm:"size:32;not null;default:key" json:"auth_type"`
-	Password           string     `gorm:"size:255" json:"password,omitempty"`
-	PrivateKey         string     `gorm:"type:text" json:"private_key,omitempty"`
-	SSHKeyID           *uint      `gorm:"index" json:"ssh_key_id"`
-	SSHKey             *SSHKey    `json:"ssh_key,omitempty"`
-	Tags               string     `gorm:"size:512" json:"tags"`
-	Status             string     `gorm:"size:32;not null;default:offline" json:"status"` // Most recent manual connection-test result, not live availability.
-	BasePath           string     `gorm:"size:255" json:"base_path"`
-	BackupDir          string     `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
-	UseSudo            bool       `gorm:"not null;default:false" json:"use_sudo"`
-	ConnectionLatency  int        `gorm:"not null;default:0" json:"connection_latency_ms"` // Most recent successful manual connection-test latency.
-	LastSeenAt         *time.Time `json:"last_seen_at"`                                    // Most recent successful manual connection test.
-	LastBackupAt       *time.Time `json:"last_backup_at"`
-	MaintenanceStart   *time.Time `json:"maintenance_start,omitempty"`
-	MaintenanceEnd     *time.Time `json:"maintenance_end,omitempty"`
-	ExpiryDate         *time.Time `gorm:"" json:"expiry_date,omitempty"`
-	Archived           bool       `gorm:"not null;default:false" json:"archived"`
-	ProbeGeneration    string     `gorm:"->" json:"-"`
-	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 uint                `gorm:"primaryKey" json:"id"`
+	Name               string              `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Host               string              `gorm:"size:255;not null" json:"host"`
+	Port               int                 `gorm:"not null;default:22" json:"port"`
+	Username           string              `gorm:"size:128;not null" json:"username"`
+	AuthType           string              `gorm:"size:32;not null;default:key" json:"auth_type"`
+	Password           string              `gorm:"size:255" json:"password,omitempty"`
+	PrivateKey         string              `gorm:"type:text" json:"private_key,omitempty"`
+	SSHKeyID           *uint               `gorm:"index" json:"ssh_key_id"`
+	SSHKey             *SSHKey             `json:"ssh_key,omitempty"`
+	Tags               string              `gorm:"size:512" json:"tags"`
+	Status             string              `gorm:"size:32;not null;default:offline" json:"status"` // Legacy status, normally the last manual connection-test result.
+	BasePath           string              `gorm:"size:255" json:"base_path"`
+	BackupDir          string              `gorm:"size:128;not null;uniqueIndex" json:"backup_dir"`
+	UseSudo            bool                `gorm:"not null;default:false" json:"use_sudo"`
+	ConnectionLatency  int                 `gorm:"not null;default:0" json:"connection_latency_ms"` // Last completed manual connection-test latency, or zero on failure.
+	LastSeenAt         *time.Time          `json:"last_seen_at"`                                    // Time of the last completed manual connection test.
+	LastBackupAt       *time.Time          `json:"last_backup_at"`
+	MaintenanceStart   *time.Time          `json:"maintenance_start,omitempty"`
+	MaintenanceEnd     *time.Time          `json:"maintenance_end,omitempty"`
+	ExpiryDate         *time.Time          `gorm:"" json:"expiry_date,omitempty"`
+	Archived           bool                `gorm:"not null;default:false" json:"archived"`
+	ProbeGeneration    string              `gorm:"->" json:"-"`
+	ConfigRevision     string              `gorm:"->;type:text" json:"revision,omitempty"`
+	ConnectionTest     *NodeConnectionTest `gorm:"-" json:"connection_test,omitempty"`
+	EscalationPolicyID *uint               `gorm:"index" json:"escalation_policy_id"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
 func (n *Node) BeforeSave(_ *gorm.DB) error {

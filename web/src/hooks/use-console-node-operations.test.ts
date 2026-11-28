@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewNodeInput, NewSSHKeyInput, NodeConnectionProbeOutcome, NodeRecord, SSHKeyRecord } from "@/types/domain";
+import type { NewNodeInput, NewSSHKeyInput, NodeConnectionProbeOutcome, NodeRecord, NodeSaveResult, SSHKeyRecord } from "@/types/domain";
 import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import { useNodeOperations } from "./use-console-node-operations";
 import { toast } from "@/components/ui/toast-sonner";
@@ -83,6 +83,9 @@ const nodeRecord: NodeRecord = {
   lastSeenAt: "-",
   lastBackupAt: "-",
 };
+
+const REVISION_A = "0123456789abcdef0123456789abcdef";
+const REVISION_B = "fedcba9876543210fedcba9876543210";
 
 const createdKey: SSHKeyRecord = {
   id: "key-new",
@@ -175,7 +178,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.createSSHKey.mockReturnValue(pendingKey.promise);
     const { result, setNodes, setSSHKeys, setWarning, markInventoryMutated, handleWriteApiError } = renderOperations();
     let current = true;
-    let created!: Promise<number>;
+    let created!: Promise<NodeSaveResult | null>;
     act(() => {
       created = result.current.createNode(inlineInput, () => current);
     });
@@ -185,7 +188,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingKey.resolve(createdKey);
-      await expect(created).resolves.toBe(-1);
+      await expect(created).resolves.toBeNull();
     });
 
     expect(apiClientMock.createNode).not.toHaveBeenCalled();
@@ -202,7 +205,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.createSSHKey.mockReturnValue(pendingKey.promise);
     const { result, setNodes, setSSHKeys, setWarning, markInventoryMutated, handleWriteApiError } = renderOperations();
     let current = true;
-    let created!: Promise<number>;
+    let created!: Promise<NodeSaveResult | null>;
     act(() => {
       created = result.current.createNode(inlineInput, () => current);
     });
@@ -211,7 +214,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingKey.reject(new Error("key write failed"));
-      await expect(created).resolves.toBe(-1);
+      await expect(created).resolves.toBeNull();
     });
 
     expect(apiClientMock.createNode).not.toHaveBeenCalled();
@@ -228,7 +231,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.createSSHKey.mockReturnValue(pendingKey.promise);
     const { result, setNodes, setSSHKeys, setWarning, markInventoryMutated, handleWriteApiError } = renderOperations();
     let current = true;
-    let updated!: Promise<void>;
+    let updated!: Promise<NodeSaveResult | null>;
     act(() => {
       updated = result.current.updateNode(nodeRecord.id, inlineInput, () => current);
     });
@@ -237,7 +240,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingKey.resolve(createdKey);
-      await updated;
+      await expect(updated).resolves.toBeNull();
     });
 
     expect(apiClientMock.updateNode).not.toHaveBeenCalled();
@@ -255,7 +258,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.createSSHKey.mockReturnValue(pendingKey.promise);
     const { result, setNodes, setSSHKeys, setWarning, markInventoryMutated, handleWriteApiError } = renderOperations();
     let current = true;
-    let updated!: Promise<void>;
+    let updated!: Promise<NodeSaveResult | null>;
     act(() => {
       updated = result.current.updateNode(nodeRecord.id, inlineInput, () => current);
     });
@@ -264,7 +267,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingKey.reject(new Error("key write failed"));
-      await updated;
+      await expect(updated).resolves.toBeNull();
     });
 
     expect(apiClientMock.updateNode).not.toHaveBeenCalled();
@@ -283,7 +286,7 @@ describe("useNodeOperations inline key lifetime", () => {
     const { result, setNodes, setSSHKeys, markInventoryMutated } = renderOperations();
 
     await act(async () => {
-      await expect(result.current.createNode(inlineInput, () => true)).resolves.toBe(nodeRecord.id);
+      await expect(result.current.createNode(inlineInput, () => true)).resolves.toEqual({ id: nodeRecord.id });
     });
 
     expect(apiClientMock.createNode).toHaveBeenCalledWith("token-1", expect.objectContaining({
@@ -302,7 +305,7 @@ describe("useNodeOperations inline key lifetime", () => {
 
     await act(async () => {
       await expect(result.current.createNode(inlineInput, () => true, (id) => { keyId = id; })).rejects.toThrow("node write failed");
-      await expect(result.current.createNode({ ...plainInput, keyId })).resolves.toBe(nodeRecord.id);
+      await expect(result.current.createNode({ ...plainInput, keyId })).resolves.toEqual({ id: nodeRecord.id });
     });
 
     expect(apiClientMock.createSSHKey).toHaveBeenCalledTimes(1);
@@ -343,7 +346,7 @@ describe("useNodeOperations inline key lifetime", () => {
     const { result, setNodes } = renderOperations();
 
     await act(async () => {
-      await expect(result.current.createNode(plainInput)).resolves.toBe(nodeRecord.id);
+      await expect(result.current.createNode(plainInput)).resolves.toEqual({ id: nodeRecord.id });
     });
 
     expect(apiClientMock.createSSHKey).not.toHaveBeenCalled();
@@ -356,7 +359,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.createNode.mockReturnValue(pendingNode.promise);
     const { result, setNodes, setWarning, handleWriteApiError } = renderOperations();
     let current = true;
-    let created!: Promise<number>;
+    let created!: Promise<NodeSaveResult | null>;
     act(() => {
       created = result.current.createNode(plainInput, () => current);
     });
@@ -365,7 +368,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingNode.reject(new Error("node write failed"));
-      await expect(created).resolves.toBe(-1);
+      await expect(created).resolves.toBeNull();
     });
 
     expect(handleWriteApiError).not.toHaveBeenCalled();
@@ -390,7 +393,7 @@ describe("useNodeOperations inline key lifetime", () => {
     apiClientMock.updateNode.mockReturnValue(pendingUpdate.promise);
     const { result, setNodes, setWarning } = renderOperations();
     let current = true;
-    let updated!: Promise<void>;
+    let updated!: Promise<NodeSaveResult | null>;
     act(() => {
       updated = result.current.updateNode(nodeRecord.id, plainInput, () => current);
     });
@@ -399,7 +402,7 @@ describe("useNodeOperations inline key lifetime", () => {
     current = false;
     await act(async () => {
       pendingUpdate.resolve({ node: nodeRecord, warning: "disk is low" });
-      await updated;
+      await expect(updated).resolves.toBeNull();
     });
 
     expect(setNodes).not.toHaveBeenCalled();
@@ -418,6 +421,48 @@ describe("useNodeOperations inline key lifetime", () => {
     expect(setNodes).toHaveBeenCalledTimes(1);
     expect(setWarning).toHaveBeenCalledWith("disk is low");
     expect(toast.warning).toHaveBeenCalledWith("disk is low");
+  });
+
+  it("returns the committed revision of a create and an update", async () => {
+    apiClientMock.createNode.mockResolvedValue({ ...nodeRecord, revision: REVISION_A });
+    apiClientMock.updateNode.mockResolvedValue({ node: { ...nodeRecord, revision: REVISION_B } });
+    const { result } = renderOperations();
+
+    await act(async () => {
+      await expect(result.current.createNode(plainInput, () => true)).resolves.toEqual({ id: nodeRecord.id, revision: REVISION_A });
+      await expect(result.current.updateNode(nodeRecord.id, { ...plainInput, expectedRevision: REVISION_A }, () => true))
+        .resolves.toEqual({ id: nodeRecord.id, revision: REVISION_B });
+    });
+
+    expect(apiClientMock.updateNode).toHaveBeenCalledWith("token-1", nodeRecord.id, expect.objectContaining({ expectedRevision: REVISION_A }));
+  });
+
+  it("rejects a revision conflict to its editor without the shared warning or a local write", async () => {
+    const conflict = new ApiError(409, "conflict", { code: 409, message: "conflict", data: { error_code: "node_revision_conflict" } });
+    apiClientMock.updateNode.mockRejectedValue(conflict);
+    const { result, setNodes, setWarning, markInventoryMutated, handleWriteApiError } = renderOperations();
+
+    await act(async () => {
+      await expect(result.current.updateNode(nodeRecord.id, { ...plainInput, expectedRevision: REVISION_A }, () => true)).rejects.toBe(conflict);
+    });
+
+    expect(handleWriteApiError).not.toHaveBeenCalled();
+    expect(setWarning).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(setNodes).not.toHaveBeenCalled();
+    expect(markInventoryMutated).not.toHaveBeenCalled();
+  });
+
+  it("keeps the shared warning for other update failures", async () => {
+    apiClientMock.updateNode.mockRejectedValue(new Error("node write failed"));
+    const { result, setWarning, handleWriteApiError } = renderOperations();
+
+    await expect(act(async () => {
+      await result.current.updateNode(nodeRecord.id, plainInput, () => true);
+    })).rejects.toThrow("node write failed");
+
+    expect(handleWriteApiError).toHaveBeenCalledTimes(1);
+    expect(setWarning).toHaveBeenCalledWith("node write failed");
   });
 });
 
@@ -1033,6 +1078,29 @@ describe("useNodeOperations connection test reconciliation", () => {
     }
     expect(refreshNodes).toHaveBeenCalledTimes(3);
     expect(handleWriteApiError).not.toHaveBeenCalled();
+  });
+
+  it("admits a post-save test only for the committed revision and keeps manual tests unconditional", async () => {
+    apiClientMock.testNodeConnection
+      .mockResolvedValueOnce({ ok: false, stale: true, message: "节点已变更" })
+      .mockResolvedValueOnce({ ok: true, message: "连接成功" });
+    const { result, refreshNodes } = renderOperations();
+
+    let outcome: NodeConnectionProbeOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9, { expectedRevision: REVISION_A });
+    });
+    expect(apiClientMock.testNodeConnection).toHaveBeenLastCalledWith("token-1", 9, { expectedRevision: REVISION_A });
+    // A newer save landed before admission: nothing was dialed for settings this save did not write.
+    expect(outcome).toEqual({ ok: false, message: "节点已变更", stale: "retest" });
+    expect(apiClientMock.getNode).not.toHaveBeenCalled();
+    expect(refreshNodes).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      outcome = await result.current.testNodeConnection(9);
+    });
+    expect(apiClientMock.testNodeConnection).toHaveBeenLastCalledWith("token-1", 9);
+    expect(outcome).toEqual({ ok: true, message: "连接成功" });
   });
 
   it("maps a server stale result to a retest without validation, host key or local health", async () => {

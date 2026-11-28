@@ -1223,6 +1223,18 @@
           "required_paths": ["TestNodeTimestampWirePostgresNonUTC"]
         },
         {
+          "name": "TestNodeRevisionTwoWritersHTTPDualDatabase",
+          "required_paths": ["TestNodeRevisionTwoWritersHTTPDualDatabase/postgres"]
+        },
+        {
+          "name": "TestNodeProbeEvidenceAndRevisionGuardHTTPDualDatabase",
+          "required_paths": ["TestNodeProbeEvidenceAndRevisionGuardHTTPDualDatabase/postgres"]
+        },
+        {
+          "name": "TestConfigImportRetainedNodeSecretsMigrated",
+          "required_paths": ["TestConfigImportRetainedNodeSecretsMigrated/postgres"]
+        },
+        {
           "name": "TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres",
           "required_paths": ["TestNodeProbeLatestAdmissionAndIdentitySQLitePostgres/postgres"]
         },
@@ -2811,6 +2823,16 @@
             "TestNodeProbeGenerationMigrationPostgres/UpgradeAndReupgrade",
             "TestNodeProbeGenerationMigrationPostgres/GenerationChanges",
             "TestNodeProbeGenerationMigrationPostgres/TriggerDrift"
+          ]
+        },
+        {
+          "name": "TestNodeConfigRevisionMigrationPostgres",
+          "required_paths": [
+            "TestNodeConfigRevisionMigrationPostgres/UpgradeDowngradeReupgrade",
+            "TestNodeConfigRevisionMigrationPostgres/ConfigAndActivityWriters",
+            "TestNodeConfigRevisionMigrationPostgres/TriggerDrift/insert",
+            "TestNodeConfigRevisionMigrationPostgres/TriggerDrift/update",
+            "TestNodeConfigRevisionMigrationPostgres/ColumnDrift"
           ]
         },
         {

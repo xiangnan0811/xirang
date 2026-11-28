@@ -1,6 +1,7 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { isNodeRevisionConflictError } from "@/lib/api/nodes-api";
 import { toast } from "@/components/ui/toast-sonner";
 import { getAuthSessionGeneration } from "@/lib/api/core";
 import { preserveSSHPurposeScope, sshKeyIsBroadScope } from "@/lib/ssh-purpose-scope";
@@ -13,6 +14,7 @@ import type {
   NewSSHKeyInput,
   NodeConnectionProbeOutcome,
   NodeRecord,
+  NodeSaveResult,
   PolicyRecord,
   SSHKeyRecord,
   TaskRecord
@@ -206,11 +208,13 @@ export function useNodeOperations({
     return true;
   }, [demoModeEnabled, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setSSHKeys, setWarning, token]);
 
+  // Resolves to the committed node and its revision; null when the write did not commit for this caller
+  // (ownership ended, or a demo-mode failure already reported through the shared warning).
   const createNode = useCallback(async (
     input: NewNodeInput,
     isCurrent?: () => boolean,
     onInlineKeyCreated?: (keyId: string) => void,
-  ): Promise<number> => {
+  ): Promise<NodeSaveResult | null> => {
     let keyId = input.keyId ?? null;
 
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
@@ -228,12 +232,12 @@ export function useNodeOperations({
         }, isCurrent);
       } catch (error) {
         if (isCurrent && !isCurrent()) {
-          return -1;
+          return null;
         }
         throw error;
       }
       if (isCurrent && !isCurrent()) {
-        return -1;
+        return null;
       }
       onInlineKeyCreated?.(keyId);
     }
@@ -245,37 +249,39 @@ export function useNodeOperations({
       ensureDemoWriteAllowed(label);
       const { buildDemoNode } = await loadDemoBuilders();
       if (isCurrent && !isCurrent()) {
-        return -1;
+        return null;
       }
       const nextNode = buildDemoNode(input, nodes, keyId);
       markInventoryMutated();
       setNodes((prev) => [nextNode, ...prev]);
-      return nextNode.id;
+      return { id: nextNode.id };
     }
 
     try {
       const created = await apiClient.createNode(token, finalInput);
       if (isCurrent && !isCurrent()) {
-        return -1;
+        return null;
       }
       markInventoryMutated();
       setNodes((prev) => [created, ...prev]);
-      return created.id;
+      return created.revision ? { id: created.id, revision: created.revision } : { id: created.id };
     } catch (error) {
       if (isCurrent && !isCurrent()) {
-        return -1;
+        return null;
       }
       handleWriteApiError(label, error);
-      return -1;
+      return null;
     }
   }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setNodes, token]);
 
+  // Resolves to the committed revision; null when ownership ended. A revision conflict rejects without the
+  // shared warning: the editor that sent the opened revision owns that feedback.
   const updateNode = useCallback(async (
     nodeID: number,
     input: NewNodeInput,
     isCurrent?: () => boolean,
     onInlineKeyCreated?: (keyId: string) => void,
-  ) => {
+  ): Promise<NodeSaveResult | null> => {
     advanceNodeFences(nodeFencesRef.current, [nodeID]);
     let keyId = input.keyId ?? null;
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
@@ -293,12 +299,12 @@ export function useNodeOperations({
         }, isCurrent);
       } catch (error) {
         if (isCurrent && !isCurrent()) {
-          return;
+          return null;
         }
         throw error;
       }
       if (isCurrent && !isCurrent()) {
-        return;
+        return null;
       }
       onInlineKeyCreated?.(keyId);
     }
@@ -309,7 +315,7 @@ export function useNodeOperations({
     if (!token) {
       ensureDemoWriteAllowed(label);
       if (isCurrent && !isCurrent()) {
-        return;
+        return null;
       }
       advanceNodeFences(nodeFencesRef.current, [nodeID]);
       markInventoryMutated();
@@ -333,13 +339,13 @@ export function useNodeOperations({
             : node
         )
       );
-      return;
+      return { id: nodeID };
     }
 
     try {
       const updated = await apiClient.updateNode(token, nodeID, finalInput);
       if (isCurrent && !isCurrent()) {
-        return;
+        return null;
       }
       advanceNodeFences(nodeFencesRef.current, [nodeID]);
       markInventoryMutated();
@@ -348,11 +354,14 @@ export function useNodeOperations({
         setWarning(updated.warning);
         toast.warning(updated.warning);
       }
+      return updated.node.revision ? { id: nodeID, revision: updated.node.revision } : { id: nodeID };
     } catch (error) {
       if (isCurrent && !isCurrent()) {
-        return;
+        return null;
       }
-      handleWriteApiError(label, error);
+      if (!isNodeRevisionConflictError(error)) {
+        handleWriteApiError(label, error);
+      }
       throw error;
     }
   }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, setNodes, setWarning, token]);
@@ -436,7 +445,13 @@ export function useNodeOperations({
   // inventory refresh publishes it under its own abort and mutation fences, so a probe can neither
   // overwrite a newer edit nor resurrect a deleted node. Ownership ends when this node is re-tested
   // or mutated here, or when the auth session changes; such results are silently superseded.
-  const testNodeConnection = useCallback(async (nodeID: number): Promise<NodeConnectionProbeOutcome> => {
+  // `expectedRevision` (post-save only) admits the test only while the node keeps the committed revision;
+  // a later change makes the server answer stale before dialing, which surfaces as a retest.
+  const testNodeConnection = useCallback(async (
+    nodeID: number,
+    options?: { expectedRevision?: string },
+  ): Promise<NodeConnectionProbeOutcome> => {
+    const expectedRevision = options?.expectedRevision;
     const fences = nodeFencesRef.current;
     advanceNodeFences(fences, [nodeID]);
     const fence = fences.get(nodeID);
@@ -449,7 +464,9 @@ export function useNodeOperations({
     // caller sees a silent supersession instead of the error.
     const result = await exec(
       i18n.t("nodes.actions.testConnection"),
-      (t) => apiClient.testNodeConnection(t, nodeID),
+      (t) => expectedRevision
+        ? apiClient.testNodeConnection(t, nodeID, { expectedRevision })
+        : apiClient.testNodeConnection(t, nodeID),
       owns,
     ).catch((error: unknown) => {
       if (owns()) {

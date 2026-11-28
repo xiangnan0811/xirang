@@ -24,7 +24,13 @@ type generatedSwaggerContractSchema struct {
 type generatedSwaggerContractDocument struct {
 	Paths map[string]map[string]struct {
 		Description string `json:"description"`
-		Responses   map[string]struct {
+		Parameters  []struct {
+			Name     string `json:"name"`
+			In       string `json:"in"`
+			Type     string `json:"type"`
+			Required bool   `json:"required"`
+		} `json:"parameters"`
+		Responses map[string]struct {
 			Schema generatedSwaggerContractSchema `json:"schema"`
 		} `json:"responses"`
 	} `json:"paths"`
@@ -143,6 +149,49 @@ func TestGeneratedSwaggerPublishesNodeBasePathWrites(t *testing.T) {
 	field, ok := schema.Properties["base_path"]
 	if !ok || field.Type != "string" || !field.Nullable || slices.Contains(schema.Required, "base_path") {
 		t.Fatalf("base_path must be an optional nullable string: %+v", field)
+	}
+}
+
+func TestGeneratedSwaggerPublishesNodeRevisionAndProbeEvidence(t *testing.T) {
+	var document generatedSwaggerContractDocument
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatalf("decode generated Swagger: %v", err)
+	}
+	request := document.Definitions["internal_api_handlers.nodeRequest"]
+	revision, ok := request.Properties["expected_revision"]
+	if !ok || revision.Type != "string" || !revision.Nullable || slices.Contains(request.Required, "expected_revision") {
+		t.Errorf("expected_revision must be an optional nullable string: %+v", revision)
+	}
+	if _, ok := document.Paths["/nodes/{id}"]["put"].Responses["409"]; !ok {
+		t.Error("PUT /nodes/{id} missing 409 response")
+	}
+	probe := document.Paths["/nodes/{id}/test-connection"]["post"]
+	found := false
+	for _, parameter := range probe.Parameters {
+		if parameter.Name == "expected_revision" && parameter.In == "query" && parameter.Type == "string" && !parameter.Required {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("POST test-connection missing optional expected_revision query parameter")
+	}
+	if _, ok := probe.Responses["400"]; !ok {
+		t.Error("POST test-connection missing 400 response")
+	}
+	node := document.Definitions["xirang_backend_internal_model.Node"]
+	if property, ok := node.Properties["revision"]; !ok || property.Type != "string" {
+		t.Errorf("node revision missing or invalid: %+v", property)
+	}
+	if property, ok := node.Properties["connection_test"]; !ok || property.Ref != "#/definitions/xirang_backend_internal_model.NodeConnectionTest" {
+		t.Errorf("node connection_test missing or invalid: %+v", property)
+	}
+	evidence := document.Definitions["xirang_backend_internal_model.NodeConnectionTest"]
+	if evidence.Properties["status"].Type != "string" || evidence.Properties["current"].Type != "boolean" {
+		t.Errorf("invalid connection test schema: %+v", evidence)
+	}
+	detail := document.Definitions["internal_api_handlers.nodeGetResponse"]
+	if detail.Properties["probe_token"].Type != "string" || detail.Properties["revision"].Type != "string" {
+		t.Errorf("node detail must include probe_token and revision: %+v", detail)
 	}
 }
 

@@ -29,7 +29,6 @@ import type {
   NewSSHKeyInput,
   NewTaskInput,
   UpdateTaskInput,
-  NodeConnectionProbeOutcome,
   NodeRecord,
   OverviewStats,
   OverviewSummary,
@@ -78,7 +77,7 @@ export interface ConsoleDataState {
   updateNode: NodesContextValue["updateNode"];
   deleteNode: (nodeId: number, isCurrent?: () => boolean) => Promise<void>;
   deleteNodes: (nodeIds: number[], isCurrent?: () => boolean) => Promise<{ deleted: number; notFoundIds: number[] }>;
-  testNodeConnection: (nodeId: number) => Promise<NodeConnectionProbeOutcome>;
+  testNodeConnection: NodesContextValue["testNodeConnection"];
   triggerNodeBackup: (nodeId: number) => Promise<void>;
 
   createPolicy: (input: NewPolicyInput) => Promise<void>;

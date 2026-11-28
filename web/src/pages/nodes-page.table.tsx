@@ -5,7 +5,13 @@ import { Link } from "react-router-dom";
 import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Badge } from "@/components/ui/badge";
-import { getNodeStatusMeta } from "@/lib/status";
+import { NodeConnectionEvidenceNote } from "@/components/node-connection-evidence";
+import {
+  describeNodeConnectionEvidence,
+  formatNodeConnectionLatency,
+  getNodeLastTestStatus,
+  getNodeStatusMeta,
+} from "@/lib/status";
 import { NodeActionsMenu } from "@/pages/nodes-page.actions-menu";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
 
@@ -106,11 +112,12 @@ export const NodesTable = React.memo(function NodesTable({
             </tr>
           ) : (
             sortedNodes.map((node) => {
-              const status = getNodeStatusMeta(node.status);
+              const status = getNodeStatusMeta(getNodeLastTestStatus(node));
               const keyLabel = node.keyId
                 ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
                 : t("common.keyUnbound");
               const checked = selectedNodeSet.has(node.id);
+              const evidence = describeNodeConnectionEvidence(node);
 
               return (
                 <tr
@@ -151,13 +158,12 @@ export const NodesTable = React.memo(function NodesTable({
                       <Badge tone={status.variant}>{status.label}</Badge>
                       <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
                     </div>
+                    <NodeConnectionEvidenceNote evidence={evidence} className="mt-1 max-w-48" />
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
-                    <p>{node.lastSeenAt || t("nodes.lastConnectionNever")}</p>
+                    <p>{evidence.testedAt ?? t("nodes.lastConnectionNever")}</p>
                     <p className="text-xs">
-                      {t("nodes.connectionLatency", {
-                        latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-",
-                      })}
+                      {t("nodes.connectionLatency", { latency: formatNodeConnectionLatency(evidence) })}
                     </p>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">

@@ -13,8 +13,11 @@ import (
 	"gorm.io/gorm"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/database"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
+	"xirang/backend/internal/nodeprobe"
 	"xirang/backend/internal/repository"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
@@ -65,10 +68,17 @@ type nodeRequest struct {
 	UseSudo          *bool   `json:"use_sudo"`
 	// Status accepts exactly online, warning, or offline. Other nonempty values return 400. Omitted, null, or empty values default to offline on create and preserve the stored status on update.
 	Status string `json:"status" extensions:"x-nullable"`
+	// ExpectedRevision is optional or null for legacy updates; a supplied value must be 32 lowercase hexadecimal characters.
+	ExpectedRevision *string `json:"expected_revision" extensions:"x-nullable"`
 }
 type nodeUpdateResponse struct {
 	Node    model.Node `json:"node"`
 	Warning string     `json:"warning,omitempty"`
+}
+
+type nodeGetResponse struct {
+	model.Node
+	ProbeToken string `json:"probe_token,omitempty"`
 }
 
 type nodeBatchDeleteRequest struct {
@@ -77,7 +87,7 @@ type nodeBatchDeleteRequest struct {
 
 // List godoc
 // @Summary      列出节点
-// @Description  返回所有节点列表，operator 仅返回自己负责的节点
+// @Description  返回所有节点列表，operator 仅返回自己负责的节点；connection_test 描述最近完成的探测及其是否适用于当前连接配置。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -86,39 +96,47 @@ type nodeBatchDeleteRequest struct {
 // @Failure      401               {object}  handlers.Response
 // @Router       /nodes [get]
 func (h *NodeHandler) List(c *gin.Context) {
-	query := h.db.Preload("SSHKey")
-	if c.Query("include_archived") != "true" {
-		query = query.Where("archived = ?", false)
-	}
-	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+	nodes := make([]model.Node, 0)
+	err := database.WithReadonlySnapshot(c.Request.Context(), h.db, func(tx *gorm.DB) error {
+		query := tx.Omit("password", "private_key")
+		if c.Query("include_archived") != "true" {
+			query = query.Where("archived = ?", false)
+		}
+		switch middleware.CurrentRole(c) {
+		case "admin", "viewer":
+		case "operator":
+			owned := tx.Model(&model.NodeOwner{}).Select("node_id").Where("user_id = ?", middleware.CurrentUserID(c))
+			query = query.Where("id IN (?)", owned)
+		default:
+			return errUnknownRole
+		}
+		if err := query.Order("id asc").Find(&nodes).Error; err != nil {
+			return err
+		}
+		if err := nodeprobe.LoadKeys(tx, nodes); err != nil {
+			return err
+		}
+		_, err := loadNodeProbeEvidence(tx, nodes)
+		return err
+	})
+	if err != nil {
 		respondInternalError(c, err)
 		return
-	} else if needFilter {
-		query = query.Where("id IN ?", nodeIDs)
 	}
-
-	var nodes []model.Node
-	if err := query.Order("id asc").Find(&nodes).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	for i := range nodes {
+		nodes[i] = nodes[i].Sanitized()
 	}
-
-	safeNodes := make([]model.Node, 0, len(nodes))
-	for _, node := range nodes {
-		safeNodes = append(safeNodes, node.Sanitized())
-	}
-
-	respondOK(c, safeNodes)
+	respondOK(c, nodes)
 }
 
 // Get godoc
 // @Summary      获取节点详情
-// @Description  返回节点详情，当前配置仍匹配最近生效探测时附带 probe_token。
+// @Description  返回节点详情，connection_test 描述最近完成的探测及其是否适用于当前连接配置；当前配置仍匹配最近生效探测且没有更新受理的探测时附带 probe_token。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "节点 ID"
-// @Success      200  {object}  handlers.Response{data=model.Node}
+// @Success      200  {object}  handlers.Response{data=nodeGetResponse}
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /nodes/{id} [get]
@@ -136,10 +154,7 @@ func (h *NodeHandler) Get(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	respondOK(c, struct {
-		model.Node
-		ProbeToken string `json:"probe_token,omitempty"`
-	}{node.Sanitized(), token})
+	respondOK(c, nodeGetResponse{Node: node.Sanitized(), ProbeToken: token})
 }
 
 // Create godoc
@@ -190,7 +205,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 
 // Update godoc
 // @Summary      更新节点
-// @Description  更新节点配置信息。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。
+// @Description  更新节点配置信息。expected_revision 省略或为 null 时兼容旧客户端；提供时必须为 32 位小写十六进制，版本冲突返回 409 node_revision_conflict。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -201,6 +216,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Router       /nodes/{id} [put]
 func (h *NodeHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -231,6 +247,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		ExpiryDate:       req.ExpiryDate,
 		Archived:         req.Archived,
 		UseSudo:          req.UseSudo,
+		ExpectedRevision: req.ExpectedRevision,
 	})
 	if err != nil {
 		handleNodeServiceError(c, err, req.BackupDir)
@@ -246,6 +263,10 @@ func (h *NodeHandler) Update(c *gin.Context) {
 
 // handleNodeServiceError maps errors from NodeService to appropriate HTTP responses.
 func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
+	if errors.Is(err, repository.ErrNodeRevisionConflict) {
+		respondConflictData(c, "节点配置已变更，请重新加载", gin.H{"error_code": "node_revision_conflict"})
+		return
+	}
 	if errors.Is(err, apperr.ErrValidation) {
 		msg := err.Error()
 		prefix := apperr.ErrValidation.Error() + ": "
@@ -398,12 +419,14 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 
 // TestConnection godoc
 // @Summary      测试节点 SSH 连接
-// @Description  测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。
+// @Description  测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。expected_revision 不匹配时不受理或连接；无效值返回 400。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "节点 ID"
+// @Param        expected_revision  query  string  false  "保存后的节点版本，32 位小写十六进制"
 // @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /nodes/{id}/test-connection [post]
@@ -412,8 +435,20 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var expected *string
+	if value, present := c.GetQuery("expected_revision"); present {
+		expected = &value
+	}
+	if err := node.ValidateExpectedRevision(expected); err != nil {
+		handleNodeServiceError(c, err, "")
+		return
+	}
 	ctx := c.Request.Context()
-	snap, err := admitNodeProbe(ctx, h.db, id)
+	snap, err := admitNodeProbeExpected(ctx, h.db, id, expected)
+	if errors.Is(err, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
