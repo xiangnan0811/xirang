@@ -837,8 +837,11 @@ const zh = {
     maxRetries: "最大重试次数",
     retryBaseSeconds: "重试基础间隔（秒）",
     retryPreview: "重试延迟预览：",
-    backupStorageInfo: "每个关联节点的数据将自动存储到 /backup/{节点备份目录}/ 下",
-    perNodePathPreview: "各节点实际备份路径",
+    targetGuidance: {
+      create: "保存成功后，系统会为所选节点生成的任务分配备份目标路径。",
+      edit: "已有策略任务沿用原目标。保存后，新生成的任务会获得备份目标路径。要查看已保存的 Rsync 目标，请在「任务」页打开对应任务的编辑窗口，查看「备份目标路径」。",
+      template: "保存模板不会创建任务，也不会分配备份目标路径。",
+    },
     appAwareBackup: "应用感知备份",
     selectProfile: "应用类型",
     appProfileNone: "不启用（手动配置钩子）",

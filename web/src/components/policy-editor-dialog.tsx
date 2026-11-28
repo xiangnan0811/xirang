@@ -154,6 +154,11 @@ export function PolicyEditorDialog({
   }, [open, token]);
 
   const isEditing = Boolean(draft.id);
+  const targetGuidanceKey = !isEditing
+    ? "policyEditor.targetGuidance.create"
+    : editingPolicy?.isTemplate
+      ? "policyEditor.targetGuidance.template"
+      : "policyEditor.targetGuidance.edit";
 
   const handleSave = async () => {
     setSaving(true);
@@ -226,9 +231,6 @@ export function PolicyEditorDialog({
             }))
           }
         />
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t('policyEditor.backupStorageInfo')}
-        </p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -301,27 +303,9 @@ export function PolicyEditorDialog({
           </div>
         </div>
       ) : null}
-
-      {/* 各节点备份路径预览 */}
-      {draft.nodeIds.length > 0 && nodes.length > 0 && (
-        <div>
-          <div className="mb-1 text-sm font-medium">{t('policyEditor.perNodePathPreview')}</div>
-          <div className="glass-panel rounded-md border border-border/60 px-3 py-2 font-mono text-xs text-muted-foreground">
-            {draft.nodeIds.map((nodeId, idx) => {
-              const node = nodes.find((n) => n.id === nodeId);
-              if (!node) return null;
-              const dirName = node.backupDir || node.name;
-              const isLast = idx === draft.nodeIds.length - 1;
-              const prefix = isLast ? '\u2514' : '\u251C';
-              return (
-                <div key={nodeId}>
-                  {prefix} {node.name} → /backup/{dirName}/
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {isEditing || draft.nodeIds.length > 0 ? (
+        <p className="text-xs text-muted-foreground">{t(targetGuidanceKey)}</p>
+      ) : null}
 
       {/* 应用感知备份 */}
       {profiles.length > 0 && (

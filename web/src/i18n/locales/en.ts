@@ -837,8 +837,11 @@ const en = {
     maxRetries: "Max Retries",
     retryBaseSeconds: "Retry Base Interval (seconds)",
     retryPreview: "Retry delay preview:",
-    backupStorageInfo: "Each node's data will be stored under /backup/{node backup dir}/",
-    perNodePathPreview: "Per-node backup paths",
+    targetGuidance: {
+      create: "After a successful save, tasks generated for the selected nodes are assigned a backup target path.",
+      edit: "Existing policy tasks keep their destinations. Tasks created on save receive a backup target path. To view a saved Rsync destination, open the task for editing on the Tasks page and look for “Backup Target Path”.",
+      template: "Saving this template does not create tasks or assign backup target paths.",
+    },
     appAwareBackup: "App-Aware Backup",
     selectProfile: "App Type",
     appProfileNone: "Disabled (manual hooks)",
