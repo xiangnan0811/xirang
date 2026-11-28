@@ -52,11 +52,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libcrypto3-3.5.9-r0.apk",
+      "file": "libcrypto3-3.5.9-r1.apk",
       "name": "libcrypto3",
-      "sha256": "9c82c86f051f3372445ecdbae5068ccc39dbc423ba8f779eaa84549fef1cfc77",
-      "size": 1980193,
-      "version": "3.5.9-r0"
+      "sha256": "d155b548ac35f48823acc704184baa463bd86c4f59ea93aca5e8120f98902c9f",
+      "size": 1980123,
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -76,11 +76,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libexpat-2.10.0-r0.apk",
+      "file": "libexpat-2.11.0-r0.apk",
       "name": "libexpat",
-      "sha256": "3a9ab8d1b66d1b76c6b41d24501ab61057efa3993f7b85cf3ff043b749e06e6e",
-      "size": 63633,
-      "version": "2.10.0-r0"
+      "sha256": "53dd39ba2dff70c2252ea81ee727289341ea28735e8e2d4f3664f9e5e5c21763",
+      "size": 65229,
+      "version": "2.11.0-r0"
     },
     {
       "arch": "x86_64",
@@ -116,11 +116,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libssl3-3.5.9-r0.apk",
+      "file": "libssl3-3.5.9-r1.apk",
       "name": "libssl3",
-      "sha256": "b5ad11f5955b3b7ddfd8c32e8c1fdd79878d208bb4dfa9bbd8f35ddc59187242",
-      "size": 381864,
-      "version": "3.5.9-r0"
+      "sha256": "4048fc08e315f235f3c7cf8b89532cfcb167edbb343299b158761966ad101b17",
+      "size": 382096,
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -132,11 +132,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libxml2-2.13.9-r1.apk",
+      "file": "libxml2-2.13.9-r2.apk",
       "name": "libxml2",
-      "sha256": "1af363248efb54914993bbd516c89878c2b5b0c53be0c78bb43d5a3e9a8ceda6",
-      "size": 495335,
-      "version": "2.13.9-r1"
+      "sha256": "53cd72242e178e4887431abaf6c04f21307f406d578781f290f691569e8c7f0a",
+      "size": 495897,
+      "version": "2.13.9-r2"
     },
     {
       "arch": "x86_64",
@@ -818,7 +818,7 @@
     {
       "arch": "x86_64",
       "name": "libcrypto3",
-      "version": "3.5.9-r0"
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -843,7 +843,7 @@
     {
       "arch": "x86_64",
       "name": "libexpat",
-      "version": "2.10.0-r0"
+      "version": "2.11.0-r0"
     },
     {
       "arch": "x86_64",
@@ -928,7 +928,7 @@
     {
       "arch": "x86_64",
       "name": "libssl3",
-      "version": "3.5.9-r0"
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -978,7 +978,7 @@
     {
       "arch": "x86_64",
       "name": "libxml2",
-      "version": "2.13.9-r1"
+      "version": "2.13.9-r2"
     },
     {
       "arch": "x86_64",
@@ -1179,11 +1179,11 @@
     "brotli-libs=1.2.1-r0",
     "c-ares=1.34.9-r0",
     "curl=8.23.0-r0",
-    "libcrypto3=3.5.9-r0",
-    "libexpat=2.10.0-r0",
-    "libssl3=3.5.9-r0",
+    "libcrypto3=3.5.9-r1",
+    "libexpat=2.11.0-r0",
+    "libssl3=3.5.9-r1",
     "libuuid=2.41.6-r1",
-    "libxml2=2.13.9-r1",
+    "libxml2=2.13.9-r2",
     "libxslt=1.1.43-r4",
     "mount=2.41.6-r1",
     "musl-utils=1.2.5-r24",

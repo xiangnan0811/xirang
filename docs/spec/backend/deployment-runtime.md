@@ -272,7 +272,7 @@ Core 的 `tzdata` 锁定更新仅影响 All-in-One 时区数据库；Worker 未�
 tzdata 包，不因此改变工具链 inventory。更新后须重新构建 Core，并复核受规则
 变化地区的本地调度时间；既有 UTC 时刻不做数据迁移。
 
-Core 与 Worker 的 Expat 显式锁定为 `libexpat=2.10.0-r0`，修复
+Core 与 Worker 此前将 Expat 更新至 `libexpat=2.10.0-r0`，修复
 `2.9.0-r0` 的 CVE-2026-117610／CVE-2026-118370。Worker 将原有传递依赖纳入
 生产工具链 inventory；工具链及 pipeline 指纹按新 inventory 和真实 APK manifest
 派生。留存事务中的 supercronic-builder 同步更新其传递 Expat；基础镜像、其他
@@ -280,6 +280,8 @@ Core 与 Worker 的 Expat 显式锁定为 `libexpat=2.10.0-r0`，修复
 最终 Core／Worker 镜像继续独立验证构建、扫描、闭包、签名运行包和就绪路径。
 排空旧 Worker 在途处理后配套更新 Core／Worker 与制品；不得沿用旧闭包或证明。
 不新增配置或数据迁移，回退旧镜像及配套制品会恢复上述漏洞。
+
+新一轮 Alpine 运行时刷新将 Core 显式锁定的 libxml2 更新为 `2.13.9-r2`，并将 Worker 两架构的传递 libxml2 更新到相同版本。Core／Worker 同步锁定 `libcrypto3`、`libssl3` 为 `3.5.9-r1`，Expat 为 `2.11.0-r0`，Worker 锁定 `zstd=1.6.0-r1`。完整 APK 投影和版本库存随程序编译。启用 Worker 的部署须排空旧处理并配套更新同源 Core／Worker、双架构闭包及授权签名制品。该轮依赖刷新不新增配置或迁移。回退旧制品会恢复旧 libxml2 的已知暴露面。
 
 Core 的 c-ares 直接锁定从软件源已不可安装的 `1.34.8-r0` 更新为 `1.34.9-r0`，
 保留基础镜像 digest 和其他包锁定。新版本包含上游 DNS 应答校验与内存安全修复；
