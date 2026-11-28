@@ -1301,6 +1301,30 @@
           ]
         },
         {
+          "name": "TestSettingsCompensationOwnershipMigrated",
+          "required_paths": [
+            "TestSettingsCompensationOwnershipMigrated/postgres",
+            "TestSettingsCompensationOwnershipMigrated/postgres/prior_writer",
+            "TestSettingsCompensationOwnershipMigrated/postgres/stale_foundation",
+            "TestSettingsCompensationOwnershipMigrated/postgres/later_writer",
+            "TestSettingsCompensationOwnershipMigrated/postgres/later_same_value",
+            "TestSettingsCompensationOwnershipMigrated/postgres/reinsert_after_delete",
+            "TestSettingsCompensationOwnershipMigrated/postgres/unrelated_writer"
+          ]
+        },
+        {
+          "name": "TestSettingsCompensationOwnershipRealRuntimeMigrated",
+          "required_paths": [
+            "TestSettingsCompensationOwnershipRealRuntimeMigrated/postgres"
+          ]
+        },
+        {
+          "name": "TestSettingsCompensationWaitsForWriterMigrated",
+          "required_paths": [
+            "TestSettingsCompensationWaitsForWriterMigrated/postgres"
+          ]
+        },
+        {
           "name": "TestSystemBackupDownloadPostgres",
           "required_paths": [
             "TestSystemBackupDownloadPostgres"

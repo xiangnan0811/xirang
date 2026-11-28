@@ -51,6 +51,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 // SettingType 设置值类型
@@ -1626,16 +1627,6 @@ func (s *Service) UpdateManyContext(ctx context.Context, values map[string]strin
 	return nil
 }
 
-// CaptureSettingOverridesContext snapshots the exact persisted state for a
-// bounded set of registered settings. A caller that also mutates Foundation
-// settings must already own the higher-level mutation gate.
-func (s *Service) CaptureSettingOverridesContext(
-	ctx context.Context,
-	keys []string,
-) (*BackupAssetOverrideSnapshot, error) {
-	return s.captureSettingOverridesContext(ctx, keys, false)
-}
-
 // CaptureBackupAssetOverridesContext snapshots the exact persisted state for a
 // bounded set of Foundation settings. The caller owns higher-level mutation
 // serialization; this method deliberately does not reacquire that gate.
@@ -1643,19 +1634,7 @@ func (s *Service) CaptureBackupAssetOverridesContext(
 	ctx context.Context,
 	keys []string,
 ) (*BackupAssetOverrideSnapshot, error) {
-	return s.captureSettingOverridesContext(ctx, keys, true)
-}
-
-func (s *Service) captureSettingOverridesContext(
-	ctx context.Context,
-	keys []string,
-	foundationOnly bool,
-) (*BackupAssetOverrideSnapshot, error) {
-	maxKeys := len(registry)
-	if foundationOnly {
-		maxKeys = 64
-	}
-	if s == nil || s.db == nil || len(keys) == 0 || len(keys) > maxKeys {
+	if s == nil || s.db == nil || len(keys) == 0 || len(keys) > 64 {
 		return nil, fmt.Errorf("settings override snapshot is unavailable")
 	}
 	if ctx == nil {
@@ -1667,7 +1646,7 @@ func (s *Service) captureSettingOverridesContext(
 	sortedKeys := append([]string(nil), keys...)
 	sort.Strings(sortedKeys)
 	for index, key := range sortedKeys {
-		if findDef(key) == nil || (foundationOnly && !IsBackupAssetFoundationSetting(key)) ||
+		if findDef(key) == nil || !IsBackupAssetFoundationSetting(key) ||
 			(index > 0 && key == sortedKeys[index-1]) {
 			return nil, fmt.Errorf("invalid settings override snapshot key: %s", key)
 		}
@@ -1693,16 +1672,6 @@ func (s *Service) captureSettingOverridesContext(
 	return &BackupAssetOverrideSnapshot{keys: sortedKeys, rows: rowByKey}, nil
 }
 
-// RestoreSettingOverridesContext atomically restores every captured raw row
-// and deletes keys that were absent. Cache invalidation occurs only after the
-// transaction commits.
-func (s *Service) RestoreSettingOverridesContext(
-	ctx context.Context,
-	snapshot *BackupAssetOverrideSnapshot,
-) error {
-	return s.restoreSettingOverridesContext(ctx, snapshot, false)
-}
-
 // RestoreBackupAssetOverridesContext atomically restores every captured raw row
 // and deletes keys that were absent. Cache invalidation occurs only after the
 // transaction commits, matching UpdateManyContext semantics.
@@ -1710,19 +1679,7 @@ func (s *Service) RestoreBackupAssetOverridesContext(
 	ctx context.Context,
 	snapshot *BackupAssetOverrideSnapshot,
 ) error {
-	return s.restoreSettingOverridesContext(ctx, snapshot, true)
-}
-
-func (s *Service) restoreSettingOverridesContext(
-	ctx context.Context,
-	snapshot *BackupAssetOverrideSnapshot,
-	foundationOnly bool,
-) error {
-	maxKeys := len(registry)
-	if foundationOnly {
-		maxKeys = 64
-	}
-	if s == nil || s.db == nil || snapshot == nil || len(snapshot.keys) == 0 || len(snapshot.keys) > maxKeys {
+	if s == nil || s.db == nil || snapshot == nil || len(snapshot.keys) == 0 || len(snapshot.keys) > 64 {
 		return fmt.Errorf("settings override restoration is unavailable")
 	}
 	if ctx == nil {
@@ -1740,7 +1697,7 @@ func (s *Service) restoreSettingOverridesContext(
 				}
 				continue
 			}
-			if row.Key != key || findDef(key) == nil || (foundationOnly && !IsBackupAssetFoundationSetting(key)) {
+			if row.Key != key || findDef(key) == nil || !IsBackupAssetFoundationSetting(key) {
 				return fmt.Errorf("invalid settings override restoration row: %s", key)
 			}
 			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
@@ -1772,10 +1729,14 @@ func (s *Service) upsert(db *gorm.DB, key, value string) error {
 		Value:     storedValue,
 		UpdatedAt: time.Now(),
 	}
-	return db.Clauses(clause.OnConflict{
+	err := db.Session(&gorm.Session{Logger: logger.Discard}).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
 	}).Create(&setting).Error
+	if err != nil {
+		return &safeSettingError{message: "persist setting failed", cause: err}
+	}
+	return nil
 }
 
 func isSensitiveSetting(key string) bool {

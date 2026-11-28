@@ -9,6 +9,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/ga"
+	assetruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -190,6 +191,9 @@ func publicBackupGAReport(report ga.AdminReport) backupGAReportResponse {
 }
 
 func respondBackupAssetEnablementConflict(c *gin.Context, err error) bool {
+	if errors.Is(err, assetruntime.ErrFeatureTransitionCompensation) {
+		return false
+	}
 	if errors.Is(err, ga.ErrEnablementBlocked) || errors.Is(err, ga.ErrEnablementAckRequired) {
 		respondConflict(c, "就绪检查未完成")
 		return true
@@ -198,6 +202,10 @@ func respondBackupAssetEnablementConflict(c *gin.Context, err error) bool {
 }
 
 func respondBackupGAError(c *gin.Context, err error) {
+	if errors.Is(err, assetruntime.ErrFeatureTransitionCompensation) {
+		respondInternalError(c, err)
+		return
+	}
 	if respondBackupAssetEnablementConflict(c, err) {
 		return
 	}

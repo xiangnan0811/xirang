@@ -38,11 +38,12 @@
 
 ## 精确回滚与失败围栏
 
-- 变更前保存 exact raw override rows 和精确 absence，含 timestamp/value、admission、success stamp、readiness/candidate 状态。mixed PUT 保存全部同事务 ordinary+Foundation keys，不只 Foundation 子集。恢复同事务提交后失效 cache，不能仅还 effective value。
+- Settings API 的 Foundation 更新与重置在实际写入事务内核对前瞻配置所依赖的当前设置，并记录受影响的全部键，包括混合更新中的普通设置。记录提交前后的原始值、数据库时间戳和精确缺行。补偿在单独的写事务内核对所有受影响的键仍匹配提交结果后，才恢复全部原始状态并在提交后失效缓存。任一键不匹配则整批停止补偿，保留现有行并进入现有失败围栏。完整相同的行状态或再次缺行无法证明中间写入历史。
+- PostgreSQL 只在读写上述设置记录的短事务内取得设置表写入锁，以 `READ COMMITTED` 在取得锁后读取。SQLite 先取得写入权再读。运行时准备和清理继续服从原有期限，数据库事务在返回运行时之前结束。提交结果无法确认时进入现有失败围栏。
 - config import 的事务 commit 后安装 sealed undo journal；后续 runtime 故障按依赖逆序恢复完整 imported DB graph/关系与 settings，不能只有设置回滚。生产等价测试必须包含全部真实 callback/graph edge。
 - 补偿可脱离 caller cancel，但所有 cleanup 共用从 bounded transition 预算保留的一个绝对 deadline，嵌套 restore 不重开 timeout。恢复前必须停止候选；无穷 detached cleanup 不可。
-- `%w`/`errors.Join` 保留 context、primary 和 `ErrFeatureTransitionCompensation` identity。任一补偿失败，先 runtime not ready，再 sticky restart-only fence；后续 readiness/transition 返回 `ErrInvalidState`，不可在线 clear/retry。
-- 错误、日志和响应只含结构化安全字段，不含 raw setting/root/secret/locator/credential/proof/ticket/Provider evidence。只有已识别 GA sentinel 是 409，其他故障通用 500。
+- `%w`/`errors.Join` 保留 context、primary 和 `ErrFeatureTransitionCompensation` identity。补偿失败或无法确认提交结果时，运行时关闭就绪状态，并拒绝新的受保护读取、发布令牌和设置切换。围栏持续到进程重启，既有令牌仍须完成释放。
+- 错误、日志和响应只含结构化安全字段，不含 raw setting/root/secret/locator/credential/proof/ticket/Provider evidence。补偿失败返回通用 500，即使同时含有 GA 就绪错误。仅单独的已识别 GA 冲突返回 409。
 
 ## 迁移与观测
 

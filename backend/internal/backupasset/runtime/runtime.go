@@ -545,7 +545,14 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		return live, err
 	}
 	liveFeature := func() (bool, error) {
-		return featureLive(foundation, enablement)
+		if result == nil || result.featureTransitionFenced.Load() {
+			return false, nil
+		}
+		live, err := result.FeatureLive()
+		if result.featureTransitionFenced.Load() {
+			return false, err
+		}
+		return live, err
 	}
 	auditWriter, err := backupasset.NewAuditWriterWithConfigSource(dependencies.DB, keyring, dependencies.Now, foundation.AuditConfig)
 	if err != nil {
@@ -2425,16 +2432,25 @@ func (runtime *Runtime) transitionBackupAssetSettingsContextWithRestore(
 		}
 		return errors.Join(restoreErr, restorePersistedErr)
 	}
+	var transitionErr error
 	if _, changesGlobalEnabled := overlay["backup_assets.enabled"]; changesGlobalEnabled {
-		return runtime.transitionFeatureWithOperationContextAndRestore(
+		transitionErr = runtime.transitionFeatureWithOperationContextAndRestore(
 			opCtx, configs, transitionExport, restoreRuntimeBundle,
 		)
-	}
-	if err := runtime.transitioner.TransitionFeature(opCtx, enabled, transitionExport); err != nil {
-		if restorePersistedErr != nil && runtime.contentManager != nil {
-			runtime.contentManager.SetReady(false)
+	} else {
+		transitionErr = runtime.transitioner.TransitionFeature(opCtx, enabled, transitionExport)
+		if restorePersistedErr != nil {
+			transitionErr = runtime.joinFeatureTransitionFailure(transitionErr, restorePersistedErr)
 		}
-		return runtime.joinFeatureTransitionFailure(err, restorePersistedErr)
+	}
+	if errors.Is(transitionErr, settings.ErrSettingOverrideCommitUncertain) && !errors.Is(transitionErr, ErrFeatureTransitionCompensation) {
+		transitionErr = runtime.joinFeatureTransitionFailure(transitionErr, transitionErr)
+	}
+	if errors.Is(transitionErr, ErrFeatureTransitionCompensation) && runtime.contentManager != nil {
+		runtime.contentManager.SetReady(false)
+	}
+	if transitionErr != nil {
+		return transitionErr
 	}
 	return nil
 }
