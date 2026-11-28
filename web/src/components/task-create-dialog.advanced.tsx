@@ -2,18 +2,18 @@ import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { Select } from "@/components/ui/select";
-import type { NodeRecord } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
 
 type TaskAdvancedProps = {
   draft: TaskDraft;
   setDraft: React.Dispatch<React.SetStateAction<TaskDraft>>;
-  nodes: NodeRecord[];
   isEditing: boolean;
+  /** Target persisted on the task being edited; the draft value can be changed while editing Rclone. */
+  savedTarget?: string;
   managedRclone: boolean;
 };
 
-export function TaskAdvanced({ draft, setDraft, nodes, isEditing, managedRclone }: TaskAdvancedProps) {
+export function TaskAdvanced({ draft, setDraft, isEditing, savedTarget, managedRclone }: TaskAdvancedProps) {
   const { t } = useTranslation();
 
   return (
@@ -54,30 +54,18 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing, managedRclone 
               }
             />
           </div>
-          {isEditing && draft.rsyncTarget ? (
-            <div className="glass-panel rounded-md px-3 py-2 text-sm">
-              <span className="font-medium text-muted-foreground">
-                {t("taskCreate.autoTargetPath")}:
-              </span>{" "}
-              <span className="font-mono text-xs">{draft.rsyncTarget}</span>
-            </div>
-          ) : (
-            <div className="glass-panel rounded-md px-3 py-2 text-sm text-muted-foreground">
-              <span className="font-medium">{t("taskCreate.autoTargetPath")}:</span>{" "}
-              {(() => {
-                const selectedNode = nodes.find((n) => String(n.id) === draft.nodeId);
-                if (selectedNode?.backupDir) {
-                  return (
-                    <span className="font-mono text-xs">
-                      /backup/{selectedNode.backupDir}/
-                    </span>
-                  );
-                }
-                return <span className="text-xs">{t("taskCreate.selectNodeFirst")}</span>;
-              })()}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground">{t("taskCreate.autoTargetHint")}</p>
+          <div className="glass-panel rounded-md px-3 py-2 text-sm">
+            <span className="font-medium text-muted-foreground">
+              {t("taskCreate.autoTargetPath")}:
+            </span>{" "}
+            {!isEditing ? (
+              <span className="text-xs text-muted-foreground">{t("taskCreate.autoTargetAssignedOnCreate")}</span>
+            ) : savedTarget?.trim() ? (
+              <span className="whitespace-pre-wrap break-all font-mono text-xs">{savedTarget}</span>
+            ) : (
+              <span className="text-xs text-muted-foreground">{t("taskCreate.autoTargetNotRecorded")}</span>
+            )}
+          </div>
         </>
       )}
 

@@ -44,7 +44,7 @@ func newHostKeyHandlerFixture(t *testing.T) *hostKeyHandlerFixture {
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
 
 	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.Alert{}, &model.CredentialAuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.Alert{}, &model.CredentialAuditEvent{}, &nodeProbeState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	node := seedDockerSSHHandlerNode(t, db, server)
@@ -56,16 +56,18 @@ func newHostKeyHandlerFixture(t *testing.T) *hostKeyHandlerFixture {
 		c.Set("role", "admin")
 		c.Next()
 	})
+	router.GET("/nodes/:id", handler.Get)
 	router.POST("/nodes/:id/test-connection", handler.TestConnection)
 	router.POST("/nodes/:id/trust-host-key", handler.TrustHostKey)
 	return &hostKeyHandlerFixture{server: server, node: node, router: router, db: db, knownHostsPath: knownHostsPath}
 }
 
 type hostKeyTestConnectionData struct {
-	OK        bool   `json:"ok"`
-	Message   string `json:"message"`
-	ErrorCode string `json:"error_code"`
-	HostKey   *struct {
+	OK         bool   `json:"ok"`
+	Message    string `json:"message"`
+	ProbeToken string `json:"probe_token"`
+	ErrorCode  string `json:"error_code"`
+	HostKey    *struct {
 		Algorithm         string `json:"algorithm"`
 		FingerprintSHA256 string `json:"fingerprint_sha256"`
 	} `json:"host_key"`
@@ -327,4 +329,46 @@ func newHostKeyTestPublicKey(t *testing.T) ssh.PublicKey {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func TestNodeHostKeyTrustRequiresCurrentProbeToken(t *testing.T) {
+	f := newHostKeyHandlerFixture(t)
+	first := f.testConnection(t)
+	if first.HostKey == nil || len(first.ProbeToken) != 64 {
+		t.Fatalf("expected tokenized unknown host: %+v", first)
+	}
+	second := f.testConnection(t)
+	if second.HostKey == nil || second.ProbeToken == first.ProbeToken {
+		t.Fatalf("new admission should return a new token: %+v", second)
+	}
+	requestTrust := func(token string) (int, hostKeyTrustResponse) {
+		body, _ := json.Marshal(map[string]string{"fingerprint_sha256": second.HostKey.FingerprintSHA256, "probe_token": token})
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/trust-host-key", f.node.ID), strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		f.router.ServeHTTP(response, req)
+		var result hostKeyTrustResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return response.Code, result
+	}
+	code, stale := requestTrust(first.ProbeToken)
+	if code != http.StatusConflict || stale.Data.ErrorCode != "node_probe_stale" || readKnownHosts(t, f.knownHostsPath) != "" {
+		t.Fatalf("stale trust: status=%d body=%+v", code, stale)
+	}
+	get := httptest.NewRecorder()
+	f.router.ServeHTTP(get, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/nodes/%d", f.node.ID), nil))
+	var detail struct {
+		Data struct {
+			ProbeToken string `json:"probe_token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(get.Body.Bytes(), &detail); err != nil || detail.Data.ProbeToken != second.ProbeToken {
+		t.Fatalf("GET must expose current token: %s %v", get.Body.String(), err)
+	}
+	code, trusted := requestTrust(second.ProbeToken)
+	if code != http.StatusOK || !trusted.Data.Trusted {
+		t.Fatalf("current trust: status=%d body=%+v", code, trusted)
+	}
 }

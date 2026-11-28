@@ -6,14 +6,16 @@ import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
 import { MobileNavigation } from "@/components/layout/mobile-navigation";
 import { ThemeProvider } from "@/context/theme-context";
-import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
+import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
+import type { NodesContextValue } from "@/context/nodes-context.shared";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, NodeRecord, NodeSaveResult, TaskRecord } from "@/types/domain";
 
 const EMERGENCY_PROOF = "fresh-manual-proof";
 
 const {
   toastSuccessMock,
+  toastInfoMock,
   toastErrorMock,
   runNodeDoctorMock,
   trustNodeHostKeyMock,
@@ -25,6 +27,9 @@ const {
   clearStepUpProofMock,
   oneShotStepUpOptions,
   getBatchStatusMock,
+  getNodeMock,
+  editorSaveErrorMock,
+  editorReloadResultMock,
 } = vi.hoisted(() => {
   const clearStepUpProofMock = vi.fn();
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
@@ -36,6 +41,7 @@ const {
   return {
     toastSuccessMock: vi.fn(),
     toastErrorMock: vi.fn(),
+    toastInfoMock: vi.fn(),
     runNodeDoctorMock: vi.fn(),
     trustNodeHostKeyMock: vi.fn(),
     authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
@@ -46,10 +52,14 @@ const {
     clearStepUpProofMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
     getBatchStatusMock: vi.fn(),
+    getNodeMock: vi.fn(),
+    editorSaveErrorMock: vi.fn(),
+    editorReloadResultMock: vi.fn(),
   };
 });
 
 const HOST_KEY_FINGERPRINT = "SHA256:hostKeyProbeFingerprintForNodesPage";
+const PROBE_TOKEN = "d".repeat(64);
 
 function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
   return {
@@ -60,7 +70,19 @@ function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
       algorithm: "ssh-ed25519",
       fingerprintSha256: HOST_KEY_FINGERPRINT,
     },
+    probeToken: PROBE_TOKEN,
   };
+}
+
+// 卡片与列表行共用同一个节点更多菜单：诊断、终端、文件、编辑、迁移与删除都在其中。
+async function clickNodeMenuItem(
+  user: ReturnType<typeof userEvent.setup>,
+  scope: HTMLElement,
+  nodeName: string,
+  item: RegExp | string,
+) {
+  await user.click(within(scope).getByRole("button", { name: `节点 ${nodeName} 更多操作` }));
+  await user.click(await screen.findByRole("menuitem", { name: item }));
 }
 
 function createMemoryStorage() {
@@ -132,14 +154,18 @@ vi.mock("@/components/batch-command-dialog", () => ({
   ),
 }));
 
+// The real editor sends the revision it opened and owns conflict feedback; the mock records both.
 vi.mock("@/components/node-editor-dialog", () => ({
   NodeEditorDialog: ({
     open,
+    onOpenChange,
     editingNode,
     onSave,
+    onReloadNode,
   }: {
     open: boolean;
-    editingNode: { id?: number; name: string } | null;
+    onOpenChange?: (open: boolean) => void;
+    editingNode: { id?: number; name: string; revision?: string } | null;
     onSave?: (input: {
       name: string;
       host: string;
@@ -147,7 +173,9 @@ vi.mock("@/components/node-editor-dialog", () => ({
       username: string;
       authType: "key";
       tags: string;
+      expectedRevision?: string;
     }, nodeId?: number) => Promise<void>;
+    onReloadNode?: (nodeId: number) => Promise<unknown>;
   }) =>
     open ? (
       <div role="dialog" aria-label={editingNode ? `编辑节点 - ${editingNode.name}` : "编辑节点"}>
@@ -155,7 +183,7 @@ vi.mock("@/components/node-editor-dialog", () => ({
         <button
           type="button"
           onClick={() => {
-            void onSave?.(
+            void Promise.resolve(onSave?.(
               {
                 name: editingNode?.name ?? "node-new",
                 host: "10.0.0.9",
@@ -163,12 +191,26 @@ vi.mock("@/components/node-editor-dialog", () => ({
                 username: "root",
                 authType: "key",
                 tags: "prod",
+                ...(editingNode?.revision ? { expectedRevision: editingNode.revision } : {}),
               },
               editingNode?.id,
-            );
+            )).catch(editorSaveErrorMock);
           }}
         >
           保存并测试
+        </button>
+        {editingNode?.id ? (
+          <button
+            type="button"
+            onClick={() => {
+              void Promise.resolve(onReloadNode?.(editingNode.id ?? 0)).then(editorReloadResultMock, editorReloadResultMock);
+            }}
+          >
+            Reload saved node
+          </button>
+        ) : null}
+        <button type="button" onClick={() => onOpenChange?.(false)}>
+          Close editor
         </button>
       </div>
     ) : null,
@@ -182,6 +224,7 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: toastSuccessMock,
     error: toastErrorMock,
+    info: toastInfoMock,
   },
 }));
 
@@ -193,6 +236,7 @@ vi.mock("@/lib/api/client", () => ({
     requestTaskManualTriggerCredentialGrant: grantMock,
     emergencyBackup: emergencyBackupMock,
     getBatchStatus: getBatchStatusMock,
+    getNode: getNodeMock,
   },
 }));
 
@@ -267,8 +311,8 @@ function createContext(overrides?: Record<string, unknown>) {
   };
   nodesRef.current = {
     nodes: defaultNodes,
-    createNode: vi.fn().mockResolvedValue(3),
-    updateNode: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn().mockResolvedValue({ id: 3 }),
+    updateNode: vi.fn(async (nodeId: number) => ({ id: nodeId })),
     deleteNode: vi.fn().mockResolvedValue(undefined),
     deleteNodes: vi.fn().mockResolvedValue({ deleted: 0, notFoundIds: [] }),
     testNodeConnection: vi.fn().mockResolvedValue({ ok: true, message: "连接成功" }),
@@ -388,6 +432,31 @@ class DeferredTextFile extends File {
   }
 }
 
+const REVISION_A = "0123456789abcdef0123456789abcdef";
+const REVISION_B = "1123456789abcdef0123456789abcdef";
+const REVISION_C = "2123456789abcdef0123456789abcdef";
+const REVISION_D = "3123456789abcdef0123456789abcdef";
+
+function revisedNode(revision: string, overrides: Partial<NodeRecord> = {}): NodeRecord {
+  return {
+    id: 1,
+    name: "node-prod-1",
+    host: "node-prod-1.example.com",
+    address: "10.0.0.1",
+    ip: "10.0.0.1",
+    port: 22,
+    username: "root",
+    authType: "key",
+    keyId: "key-1",
+    tags: ["prod"],
+    status: "online",
+    lastSeenAt: "2026-02-24 12:00:00",
+    lastBackupAt: "2026-02-24 11:50:00",
+    revision,
+    ...overrides,
+  };
+}
+
 describe("NodesPage", () => {
   beforeEach(() => {
     Object.defineProperty(window, "localStorage", {
@@ -399,10 +468,14 @@ describe("NodesPage", () => {
     confirmMock.mockResolvedValue(true);
     cancelPendingMock.mockClear();
     getBatchStatusMock.mockReset();
+    getNodeMock.mockReset();
+    editorSaveErrorMock.mockReset();
+    editorReloadResultMock.mockReset();
     navigateMock.mockReset();
     setSearchParamsMock.mockReset();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
+    toastInfoMock.mockReset();
     runNodeDoctorMock.mockReset();
     trustNodeHostKeyMock.mockReset();
     getTasksMock.mockReset();
@@ -488,30 +561,41 @@ describe("NodesPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("桌面节点卡片聚焦详情链接时标记当前节点", async () => {
+  it("节点卡片只按勾选状态标记选中，不再自动高亮首个节点", async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.selected", JSON.stringify(2));
 
-    const view = render(
+    render(
       <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
 
-    const secondCard = view.container.querySelector(
-      '[aria-label="节点卡片 node-dr-2"]'
-    ) as HTMLElement | null;
+    const firstCard = screen.getByLabelText("节点卡片 node-prod-1");
+    const secondCard = screen.getByLabelText("节点卡片 node-dr-2");
+    expect(firstCard.tagName).toBe("ARTICLE");
+    expect(firstCard).not.toHaveClass("border-primary/45");
+    expect(secondCard).not.toHaveClass("border-primary/45");
 
-    expect(secondCard).not.toBeNull();
-    if (!secondCard) {
-      throw new Error("未找到第二张节点卡片");
-    }
+    within(secondCard).getByRole("link", { name: "node-dr-2" }).focus();
+    expect(secondCard).not.toHaveClass("border-primary/45");
 
-    await user.tab();
-    const secondLink = screen.getAllByRole("link", { name: "node-dr-2" })[1];
-    secondLink.focus();
-
+    await user.click(within(secondCard).getByRole("checkbox", { name: "选择节点 node-dr-2" }));
     expect(secondCard).toHaveClass("border-primary/45");
-    expect(secondLink).toHaveFocus();
+    expect(firstCard).not.toHaveClass("border-primary/45");
+  });
+
+  it("移动端卡片以节点名称命名，桌面卡片保留节点卡片名称", () => {
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const articles = screen.getAllByRole("article", { name: "node-prod-1" });
+    expect(articles).toHaveLength(1);
+    expect(articles[0].closest(".md\\:hidden")).not.toBeNull();
+    expect(screen.getByRole("article", { name: "节点卡片 node-prod-1" }).closest(".md\\:hidden")).toBeNull();
   });
 
   it("持久化列表视图时移动端仍展示卡片视图", () => {
@@ -533,6 +617,49 @@ describe("NodesPage", () => {
 
     // 同时应渲染 NodesTable（仅桌面可见）
     expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+
+  it("最近备份优先按真实备份时刻排序，而非显示文本；无备份置后，同一时刻保持原顺序", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    const baseNode = {
+      host: "node.example.com",
+      address: "10.0.0.9",
+      ip: "10.0.0.9",
+      port: 22,
+      username: "root",
+      authType: "key" as const,
+      keyId: "key-1",
+      tags: ["prod"],
+      status: "online" as const,
+      lastSeenAt: "2026-11-01 02:00:00",
+    };
+    // America/New_York 回拨时 01:30 出现两次：显示文本相同，EST 一次晚一小时；亚毫秒差异同样参与排序。
+    const fallBackText = "2026-11-01 01:30:00";
+    const estSeconds = Date.UTC(2026, 10, 1, 6, 30) / 1000;
+    createContext({
+      nodes: [
+        { ...baseNode, id: 1, name: "node-never", lastBackupAt: "-" },
+        { ...baseNode, id: 2, name: "node-edt-a", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds - 3600, nanoseconds: 0 } },
+        { ...baseNode, id: 3, name: "node-pre-epoch", lastBackupAt: "1969-12-31 23:59:59", lastBackupInstant: { epochSeconds: -1, nanoseconds: 500_000_000 } },
+        { ...baseNode, id: 4, name: "node-est-micro", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds, nanoseconds: 123_456_000 } },
+        { ...baseNode, id: 5, name: "node-edt-b", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds - 3600, nanoseconds: 0 } },
+        { ...baseNode, id: 6, name: "node-est-nano", lastBackupAt: fallBackText, lastBackupInstant: { epochSeconds: estSeconds, nanoseconds: 123_456_789 } },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "节点排序方式" }), "backup-recent");
+
+    const order = within(screen.getByRole("table"))
+      .getAllByRole("link", { name: /^node-/ })
+      .map((link) => link.textContent);
+    expect(order).toEqual(["node-est-nano", "node-est-micro", "node-edt-a", "node-edt-b", "node-pre-epoch", "node-never"]);
   });
 
   it("移动端「更多」菜单可展开导入导出操作", async () => {
@@ -637,11 +764,86 @@ describe("NodesPage", () => {
     await user.click(await screen.findByRole("button", { name: "信任并重试" }));
 
     await waitFor(() => {
-      expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT);
+      expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT, PROBE_TOKEN);
       expect(testNodeConnection).toHaveBeenCalledTimes(2);
     });
     expect(toastSuccessMock).toHaveBeenCalledWith("已信任该主机指纹，正在重新测试连接。");
     expect(toastSuccessMock).toHaveBeenCalledWith("node-prod-1：连接成功");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("服务器不再接受的测试结果只给出重测提示，不打开指纹确认", async () => {
+    const user = userEvent.setup();
+    createContext({
+      testNodeConnection: vi.fn().mockResolvedValue({ ok: false, message: "已有更新的连接测试", stale: "retest" }),
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+
+    await waitFor(() => {
+      expect(toastInfoMock).toHaveBeenCalledWith("node-prod-1：该结果已被更新的配置或测试取代，请重新测试连接确认。");
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("被更新测试、节点变更或身份切换取代的结果保持静默", async () => {
+    const user = userEvent.setup();
+    const testNodeConnection = vi.fn().mockResolvedValue({ ok: false, message: "", stale: "superseded" });
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toastInfoMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("信任时测试结果已过期则关闭确认、不重测也不再次信任", async () => {
+    const user = userEvent.setup();
+    trustNodeHostKeyMock.mockRejectedValue(new ApiError(409, "连接测试结果已过期", {
+      code: 409,
+      message: "连接测试结果已过期",
+      data: { error_code: "node_probe_stale" },
+    }));
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+
+    await waitFor(() => {
+      expect(toastInfoMock).toHaveBeenCalledWith("node-prod-1：节点或其最近一次连接测试已变化，未信任该指纹。请重新测试连接后再确认。");
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1);
+    expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT, PROBE_TOKEN);
+    expect(testNodeConnection).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -719,6 +921,58 @@ describe("NodesPage", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("node-prod-1");
   });
 
+  it("身份往返后旧信任请求结束不会释放新弹窗的待确认状态", async () => {
+    const user = userEvent.setup();
+    const staleTrust = createDeferred<unknown>();
+    const currentTrust = createDeferred<unknown>();
+    trustNodeHostKeyMock
+      .mockReturnValueOnce(staleTrust.promise)
+      .mockReturnValueOnce(currentTrust.promise);
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    createContext({ testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1));
+
+    // A → B → A: each sign-in starts a new session; the first trust request is still in flight.
+    bumpAuthSessionGeneration();
+    rerenderAuth(view, { role: "admin", token: "token-b" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    bumpAuthSessionGeneration();
+    rerenderAuth(view, { role: "admin", token: "test-token" });
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      staleTrust.reject(new Error("旧会话的信任请求失败"));
+    });
+
+    // The new dialog's pending trust survives the old request: still busy, no stray error, not closable.
+    const trustButton = screen.getByRole("button", { name: "信任并重试" });
+    expect(trustButton).toHaveAttribute("aria-busy", "true");
+    expect(trustButton).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toHaveTextContent(HOST_KEY_FINGERPRINT);
+
+    await act(async () => {
+      currentTrust.resolve({
+        alreadyTrusted: false,
+        algorithm: "ssh-ed25519",
+        fingerprintSha256: HOST_KEY_FINGERPRINT,
+      });
+    });
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledTimes(3));
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).toHaveBeenCalledWith("已信任该主机指纹，正在重新测试连接。");
+    expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(2);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
   it("非管理员看到指纹但没有信任按钮", async () => {
     const user = userEvent.setup();
     authRef.current.role = "operator";
@@ -765,7 +1019,7 @@ describe("NodesPage", () => {
   it("保存后自动测试遇到未知主机密钥时弹出指纹确认", async () => {
     const user = userEvent.setup();
     const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
-    const createNode = vi.fn().mockResolvedValue(9);
+    const createNode = vi.fn().mockResolvedValue({ id: 9 });
     createContext({ testNodeConnection, createNode });
 
     render(
@@ -784,6 +1038,337 @@ describe("NodesPage", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
+  it("旧表单保存遇到修订冲突时保留编辑器、不提示也不测试，即使列表已刷新出新修订", async () => {
+    const user = userEvent.setup();
+    const conflict = new ApiError(409, "conflict", { code: 409, message: "conflict", data: { error_code: "node_revision_conflict" } });
+    const updateNode = vi.fn().mockRejectedValue(conflict);
+    const testNodeConnection = vi.fn();
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    // Another save lands and the inventory refresh publishes it while this form stays open.
+    nodesRef.current.nodes = [revisedNode(REVISION_B)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+
+    await waitFor(() => expect(editorSaveErrorMock).toHaveBeenCalledWith(conflict));
+    expect(updateNode).toHaveBeenCalledTimes(1);
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_A });
+    expect(testNodeConnection).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "编辑节点 - node-prod-1" })).toBeInTheDocument();
+  });
+
+  it("显式重新加载按当前 token 读取已保存节点，身份变化后丢弃迟到结果", async () => {
+    const user = userEvent.setup();
+    const saved = revisedNode(REVISION_B, { host: "10.0.0.42" });
+    const pendingReload = createDeferred<NodeRecord>();
+    getNodeMock.mockResolvedValueOnce(saved).mockReturnValueOnce(pendingReload.promise);
+    createContext({ nodes: [revisedNode(REVISION_A)] });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(saved));
+    expect(getNodeMock).toHaveBeenCalledWith("test-token", 1);
+
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(2));
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    await act(async () => {
+      pendingReload.resolve(saved);
+    });
+
+    expect(editorReloadResultMock).toHaveBeenCalledTimes(2);
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(null);
+  });
+
+  it("保存成功后的自动测试只针对本次提交的修订，与此后刷新的列表无关", async () => {
+    const user = userEvent.setup();
+    const pendingUpdate = createDeferred<NodeSaveResult | null>();
+    const createNode = vi.fn().mockResolvedValue({ id: 9, revision: REVISION_A });
+    const updateNode = vi.fn(() => pendingUpdate.promise);
+    const testNodeConnection = vi.fn().mockResolvedValue({ ok: true, message: "连接成功" });
+    createContext({ nodes: [revisedNode(REVISION_A)], createNode, updateNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getByRole("button", { name: "新增节点" }));
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledWith(9, { expectedRevision: REVISION_A }));
+
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    // The save is slow and a later revision reaches the inventory first; the probe still names this save's.
+    nodesRef.current.nodes = [revisedNode(REVISION_D)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await act(async () => {
+      pendingUpdate.resolve({ id: 1, revision: REVISION_C });
+    });
+
+    await waitFor(() => expect(testNodeConnection).toHaveBeenLastCalledWith(1, { expectedRevision: REVISION_C }));
+    expect(testNodeConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("显式重新加载成功后关闭再打开，列表读取延迟或仍发布旧行时编辑器以重新加载的节点为准", async () => {
+    const user = userEvent.setup();
+    const reloaded = revisedNode(REVISION_B, { host: "10.0.0.42" });
+    const otherNode = revisedNode(REVISION_C, { id: 2, name: "node-dr-2", host: "node-dr-2.example.com", ip: "10.0.0.2", address: "10.0.0.2", tags: ["dr"] });
+    getNodeMock.mockResolvedValueOnce(reloaded);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>(async (nodeId) => ({ id: nodeId, revision: REVISION_D }));
+    const refreshNodes = vi.fn(() => new Promise<void>(() => {}));
+    createContext({ nodes: [revisedNode(REVISION_A), otherNode], updateNode, refreshNodes });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    const refreshesBeforeReload = refreshNodes.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(reloaded));
+    // The inventory is asked to catch up; its read stays in flight for the rest of this test.
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    expect(screen.queryByRole("dialog", { name: "编辑节点 - node-prod-1" })).not.toBeInTheDocument();
+
+    // A delayed list read still publishes the revision that conflicted.
+    nodesRef.current.nodes = [revisedNode(REVISION_A), otherNode];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+    // Another node keeps its own row.
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-dr-2"), "node-dr-2", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(2));
+    expect(updateNode.mock.calls[1]?.[0]).toBe(1);
+    expect(updateNode.mock.calls[1]?.[1]).toMatchObject({ expectedRevision: REVISION_B });
+  });
+
+  it("重新加载读取期间列表发布了该节点的另一修订时拒绝较早的读取，保留草稿可重试，且不缓存它", async () => {
+    const user = userEvent.setup();
+    const pendingReload = createDeferred<NodeRecord>();
+    const published = revisedNode(REVISION_C, { host: "10.0.0.43" });
+    getNodeMock.mockReturnValueOnce(pendingReload.promise).mockResolvedValueOnce(published);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>().mockRejectedValue(new Error("stop"));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(1));
+    // A refresh publishes revision C while the detail read is outstanding; the read then settles with B.
+    nodesRef.current.nodes = [published];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await act(async () => {
+      pendingReload.resolve(revisedNode(REVISION_B, { host: "10.0.0.42" }));
+    });
+
+    // Opaque revisions cannot order B against C: the editor gets a failure, keeps its draft and may retry.
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(1));
+    expect(editorReloadResultMock.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(screen.getByRole("dialog", { name: "编辑节点 - node-prod-1" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(2));
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(published);
+
+    // B was never cached: a new edit session starts from the published C.
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+  });
+
+  it("关闭再打开后，前一编辑会话迟到的重新加载结果既不回报、不缓存也不刷新", async () => {
+    const user = userEvent.setup();
+    const pendingOldReload = createDeferred<NodeRecord>();
+    const current = revisedNode(REVISION_C, { host: "10.0.0.44" });
+    getNodeMock.mockReturnValueOnce(pendingOldReload.promise).mockResolvedValueOnce(current);
+    const updateNode = vi.fn<NodesContextValue["updateNode"]>().mockRejectedValue(new Error("stop"));
+    const refreshNodes = vi.fn(() => new Promise<void>(() => {}));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode, refreshNodes });
+
+    renderNodesPage();
+    const openEditor = () =>
+      clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await openEditor();
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(getNodeMock).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+
+    // A new session of the same node reloads C; its inventory refresh stays pending.
+    await openEditor();
+    const refreshesBeforeReload = refreshNodes.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+    await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledWith(current));
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+
+    // The first session's read settles last with B: dropped silently, C stays the remembered node.
+    await act(async () => {
+      pendingOldReload.resolve(revisedNode(REVISION_B, { host: "10.0.0.42" }));
+    });
+    expect(editorReloadResultMock).toHaveBeenCalledTimes(2);
+    expect(editorReloadResultMock).toHaveBeenLastCalledWith(null);
+    expect(refreshNodes).toHaveBeenCalledTimes(refreshesBeforeReload + 1);
+
+    await user.click(screen.getByRole("button", { name: "Close editor" }));
+    await openEditor();
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(1));
+    expect(updateNode.mock.calls[0]?.[1]).toMatchObject({ expectedRevision: REVISION_C });
+  });
+
+  it("列表发布了更新的修订、身份或角色变化后，再次打开编辑器不再沿用重新加载的节点", async () => {
+    const user = userEvent.setup();
+    getNodeMock.mockResolvedValue(revisedNode(REVISION_B));
+    const updateNode = vi.fn().mockRejectedValue(new Error("stop"));
+    createContext({ nodes: [revisedNode(REVISION_A)], updateNode });
+
+    const view = renderNodesPage();
+    const reloadThenClose = async () => {
+      await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+      const reloads = editorReloadResultMock.mock.calls.length;
+      await user.click(screen.getByRole("button", { name: "Reload saved node" }));
+      await waitFor(() => expect(editorReloadResultMock).toHaveBeenCalledTimes(reloads + 1));
+      await user.click(screen.getByRole("button", { name: "Close editor" }));
+    };
+    const reopenAndSave = async () => {
+      await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+      const saves = updateNode.mock.calls.length;
+      await user.click(screen.getByRole("button", { name: "保存并测试" }));
+      await waitFor(() => expect(updateNode).toHaveBeenCalledTimes(saves + 1));
+      await user.click(screen.getByRole("button", { name: "Close editor" }));
+      return updateNode.mock.calls[saves]?.[1];
+    };
+
+    // The inventory moved past the stale row (another save landed): its row wins over the reload.
+    await reloadThenClose();
+    nodesRef.current.nodes = [revisedNode(REVISION_C)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_C });
+
+    // A token change discards the reload.
+    nodesRef.current.nodes = [revisedNode(REVISION_A)];
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+    await reloadThenClose();
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_A });
+
+    // So does a role round trip under the same token.
+    await reloadThenClose();
+    rerenderAuth(view, { role: "operator", token: "next-token" });
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(await reopenAndSave()).toMatchObject({ expectedRevision: REVISION_A });
+  });
+
+  it("保存成功后自动测试进行中，卡片保留写入响应带回的已完成测试结论", async () => {
+    const user = userEvent.setup();
+    const pendingProbe = createDeferred<NodeConnectionProbeOutcome>();
+    const testNodeConnection = vi.fn(() => pendingProbe.promise);
+    const updateNode = vi.fn(async (nodeId: number) => {
+      // The write response carries the recorded evidence, which the inventory publishes as the node's row;
+      // the raw status a legacy writer may have reset does not replace it.
+      nodesRef.current.nodes = [
+        revisedNode(REVISION_B, { status: "offline", connectionTest: { status: "online", current: false } }),
+      ];
+      return { id: nodeId, revision: REVISION_B };
+    });
+    createContext({
+      nodes: [revisedNode(REVISION_A, { connectionTest: { status: "online", current: true } })],
+      updateNode,
+      testNodeConnection,
+    });
+
+    const view = renderNodesPage();
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
+    await user.click(screen.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(testNodeConnection).toHaveBeenCalledWith(1, { expectedRevision: REVISION_B }));
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    expect(within(card).getByText("测试通过")).toBeInTheDocument();
+    expect(within(card).getByText("使用此前的连接设置测试")).toBeInTheDocument();
+    expect(within(card).queryByText("尚未进行连接测试")).not.toBeInTheDocument();
+
+    await act(async () => {
+      pendingProbe.resolve({ ok: true, message: "连接成功" });
+    });
+  });
+
+  it("计数、筛选与搜索以最近测试结论为准，原始状态与之矛盾时不被采用", () => {
+    createContext({
+      globalSearch: "offline",
+      nodes: [
+        revisedNode(REVISION_A, { status: "online", connectionTest: { status: "offline", current: false } }),
+        revisedNode(REVISION_B, { id: 2, name: "node-dr-2", host: "node-dr-2.example.com", ip: "10.0.0.2", address: "10.0.0.2", status: "warning", tags: ["dr"] }),
+      ],
+    });
+
+    renderNodesPage();
+
+    expect(screen.getByText("最近测试通过: 0")).toBeInTheDocument();
+    expect(screen.getByText("最近测试未通过: 2")).toBeInTheDocument();
+    // Only the node whose latest test failed matches "offline"; its raw "online" is not searched.
+    expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument();
+  });
+
+  it("已修订但从未测试的节点单独计为未测试，不计入通过或未通过，状态排序排在最后", () => {
+    createContext({
+      nodes: [
+        // No probe yet: the raw status a new node starts with is not a failed test.
+        revisedNode(REVISION_A, { name: "node-a-untested", status: "offline", lastSeenAt: "-" }),
+        revisedNode(REVISION_B, { id: 2, name: "node-b-passed", status: "online", connectionTest: { status: "online", current: true } }),
+        revisedNode(REVISION_C, { id: 3, name: "node-c-failed", status: "online", connectionTest: { status: "offline", current: true } }),
+      ],
+    });
+
+    renderNodesPage();
+
+    expect(screen.getByText("最近测试通过: 1")).toBeInTheDocument();
+    expect(screen.getByText("最近测试未通过: 1")).toBeInTheDocument();
+    const cards = screen.getAllByLabelText(/^节点卡片 /);
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "节点卡片 node-c-failed",
+      "节点卡片 node-b-passed",
+      "节点卡片 node-a-untested",
+    ]);
+    expect(within(cards[2]).getByText("未测试")).toBeInTheDocument();
+  });
+
+  it("可按未测试筛选，关键词也匹配未测试的状态码与显示文字", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.status", "untested");
+    createContext({
+      nodes: [
+        revisedNode(REVISION_A, { name: "node-fresh", status: "offline", lastSeenAt: "-" }),
+        revisedNode(REVISION_B, { id: 2, name: "node-b-passed", status: "online", connectionTest: { status: "online", current: true } }),
+      ],
+    });
+
+    const view = renderNodesPage();
+    expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument();
+    expect(screen.getByLabelText("节点卡片 node-fresh")).toBeInTheDocument();
+    expect(screen.queryByLabelText("节点卡片 node-b-passed")).not.toBeInTheDocument();
+    view.unmount();
+
+    window.localStorage.setItem("xirang.nodes.status", "all");
+    for (const keyword of ["untested", "未测试"]) {
+      const searchView = renderNodesPage();
+      const search = screen.getByRole("textbox", { name: "节点关键词筛选" });
+      await user.clear(search);
+      await user.type(search, keyword);
+      await waitFor(() => expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument());
+      expect(screen.getByLabelText("节点卡片 node-fresh")).toBeInTheDocument();
+      searchView.unmount();
+    }
+  });
+
   it("节点页提供 Fleet Doctor 入口并展示诊断结果", async () => {
     const user = userEvent.setup();
 
@@ -793,8 +1378,7 @@ describe("NodesPage", () => {
       </MemoryRouter>
     );
 
-    const doctorButtons = screen.getAllByRole("button", { name: /运行节点 node-prod-1 Fleet Doctor|Run Fleet Doctor for node node-prod-1/ });
-    await user.click(doctorButtons[0]);
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /Fleet Doctor/);
 
     expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1, { signal: expect.any(AbortSignal) });
     expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
@@ -990,6 +1574,248 @@ describe("NodesPage", () => {
     await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
     await user.click(screen.getByRole("menuitem", { name: /编辑节点/ }));
     expect(await screen.findByRole("dialog", { name: /编辑节点 - node-prod-1/ })).toBeInTheDocument();
+  });
+
+  it("宽表包在可聚焦且具名的横向滚动区域内，行操作与卡片一致", () => {
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    createContext();
+
+    renderNodesPage();
+
+    const region = screen.getByRole("region", { name: "节点列表" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(within(region).getByRole("table")).toBeInTheDocument();
+    const row = within(within(region).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement);
+    expect(row.getByRole("button", { name: "紧急备份" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "手动备份" })).toBeInTheDocument();
+  });
+
+  it("从卡片更多菜单打开 Web 终端与 Doctor，关闭后回焦到该菜单触发按钮", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    const trigger = within(card).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+
+    await clickNodeMenuItem(user, card, "node-prod-1", /Web 终端/);
+    expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+
+    await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
+    expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /SSH Fleet Doctor/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  describe("节点对话框跨响应式断点关闭回焦", () => {
+    // jsdom 无布局也未实现 checkVisibility：按断点模拟 Tailwind 隐藏类的效果。
+    // 移动端 `hidden md:*` 不显示；桌面端 `md:hidden` 不显示。
+    const atMobileBreakpoint = (element: Element) => element.closest(".hidden") === null;
+    const atDesktopBreakpoint = (element: Element) => element.closest(".md\\:hidden") === null;
+    let isVisible: (element: Element) => boolean = atDesktopBreakpoint;
+
+    beforeEach(() => {
+      isVisible = atDesktopBreakpoint;
+      Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
+        configurable: true,
+        value(this: HTMLElement) {
+          return isVisible(this);
+        },
+      });
+    });
+
+    afterEach(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).checkVisibility;
+    });
+
+    function mobileMoreButton(nodeName = "node-prod-1") {
+      return within(screen.getByRole("article", { name: nodeName }))
+        .getByRole("button", { name: `节点 ${nodeName} 更多操作` });
+    }
+
+    function expectInventoryRegionFocused(card: HTMLElement) {
+      const focused = document.activeElement as HTMLElement | null;
+      expect(focused?.getAttribute("tabindex")).toBe("-1");
+      expect(focused?.contains(card)).toBe(true);
+    }
+
+    it("列表行打开 Web 终端后缩到移动端，关闭时回焦同节点可见的更多按钮", async () => {
+      window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const row = within(screen.getByRole("table")).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement;
+      const rowMore = within(row).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+      await clickNodeMenuItem(user, row, "node-prod-1", /Web 终端/);
+      expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+
+      isVisible = atMobileBreakpoint;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+      await waitFor(() => expect(mobileMoreButton()).toHaveFocus());
+      expect(rowMore).not.toHaveFocus();
+    });
+
+    it("桌面卡片打开文件浏览后缩到移动端，关闭时回焦移动卡片的同节点更多按钮", async () => {
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await clickNodeMenuItem(user, card, "node-prod-1", /文件浏览/);
+      expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
+
+      isVisible = atMobileBreakpoint;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /文件浏览/ })).not.toBeInTheDocument());
+      await waitFor(() => expect(mobileMoreButton()).toHaveFocus());
+    });
+
+    it("同节点没有可见的更多按钮时回焦节点清单区域", async () => {
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
+      expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+
+      isVisible = (element) => element.closest("[data-node-actions-trigger]") === null;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /SSH Fleet Doctor/ })).not.toBeInTheDocument());
+      await waitFor(() => expectInventoryRegionFocused(card));
+    });
+
+    it("身份切换关闭对话框时不回焦旧身份记录的触发按钮", async () => {
+      const user = userEvent.setup();
+      const view = renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      const trigger = within(card).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+      await clickNodeMenuItem(user, card, "node-prod-1", /Web 终端/);
+      expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+
+      rerenderAuth(view, { role: "operator", token: "test-token" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+      await waitFor(() => expectInventoryRegionFocused(card));
+      expect(trigger).not.toHaveFocus();
+    });
+  });
+
+  it("没有生效筛选时禁用重置，输入关键词后可重置", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    const reset = screen.getByRole("button", { name: "重置" });
+    expect(reset).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "节点关键词筛选" }), "dr");
+    expect(reset).toBeEnabled();
+    await user.click(reset);
+    expect(reset).toBeDisabled();
+  });
+
+  it("关键词可匹配当前语言下显示的节点状态", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    await user.type(screen.getByRole("textbox", { name: "节点关键词筛选" }), "测试告警");
+    await waitFor(() => expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument());
+    expect(screen.queryByLabelText("节点卡片 node-prod-1")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+  });
+
+  it("加载成功但没有节点时显示空库存而非筛选为空", () => {
+    createContext({ nodes: [] });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("还没有节点")).toHaveLength(2);
+    expect(screen.queryByText("当前筛选条件下暂无节点")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置筛选" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "新增节点" }).length).toBeGreaterThan(1);
+  });
+
+  it("只读用户的空库存不提供新增入口", () => {
+    authRef.current.role = "viewer";
+    createContext({ nodes: [] });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("还没有节点")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
+  });
+
+  it("分组视图的分组全选只作用于该分组，选择卡片或列表视图即退出分组", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext();
+
+    renderNodesPage();
+
+    const groupButton = screen.getByRole("button", { name: "分组" });
+    expect(groupButton).toHaveAttribute("aria-pressed", "true");
+    const prodGroup = Array.from(document.querySelectorAll("details"))
+      .find((group) => group.querySelector("summary")?.textContent?.startsWith("prod")) as HTMLElement;
+    await user.click(within(prodGroup).getByRole("checkbox", { name: "全选当前页可见节点" }));
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]).toBeChecked();
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-dr-2" })[0]).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "批量 (1)" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "节点列表视图" }));
+    expect(groupButton).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(window.localStorage.getItem("xirang.nodes.groupView")).toBe(JSON.stringify(false));
+  });
+
+  it("分组视图下没有匹配节点时仍显示筛选为空状态", () => {
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext({ globalSearch: "does-not-match" });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("当前筛选条件下暂无节点")).toHaveLength(2);
+  });
+
+  it("分组视图按存储的 constructor / __proto__ 标签正常分组", () => {
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext();
+    const [prod, dr] = nodesRef.current.nodes as Array<Record<string, unknown>>;
+    createContext({
+      nodes: [
+        { ...prod, tags: ["constructor"] },
+        { ...dr, tags: ["__proto__", "prod"] },
+      ],
+    });
+
+    renderNodesPage();
+
+    const groups = Array.from(document.querySelectorAll("details"));
+    const groupFor = (tag: string) => groups.find((group) => group.querySelector("summary")?.textContent?.startsWith(tag)) as HTMLElement;
+    expect(groups).toHaveLength(3);
+    expect(within(groupFor("constructor")).getByLabelText("节点卡片 node-prod-1")).toBeInTheDocument();
+    expect(within(groupFor("constructor")).queryByLabelText("节点卡片 node-dr-2")).not.toBeInTheDocument();
+    expect(within(groupFor("__proto__")).getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+    expect(within(groupFor("prod")).getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+  });
+
+  it("切换身份后清空批量选择", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]);
+    expect(screen.getByRole("button", { name: "批量 (1)" })).toBeInTheDocument();
+
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(screen.getByRole("button", { name: "批量" })).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]).not.toBeChecked();
   });
 
   it("紧急备份确认后用一次性 proof 按任务 ID 顺序授权，再提交一次", async () => {
@@ -1241,40 +2067,54 @@ describe("NodesPage", () => {
     return card;
   }
 
-  function expectOperateActions(scope: ReturnType<typeof within>, present: boolean) {
-    const names = [
-      /测试节点 node-prod-1 连接/,
-      /运行节点 node-prod-1 Fleet Doctor/,
-      "手动备份",
-      "紧急备份",
-      /浏览节点 node-prod-1 文件/,
-    ] as const;
-    for (const name of names) {
+  // 直出操作与更多菜单内容按角色检查；卡片与列表行共用同一菜单。
+  async function expectCardActions(
+    user: ReturnType<typeof userEvent.setup>,
+    card: HTMLElement,
+    role: "admin" | "operator" | "viewer",
+  ) {
+    const scope = within(card);
+    const operate = role !== "viewer";
+    for (const name of [/测试节点 node-prod-1 连接/, "手动备份", "紧急备份"] as const) {
       const button = scope.queryByRole("button", { name });
-      if (present) {
+      if (operate) {
         expect(button).toBeInTheDocument();
       } else {
         expect(button).not.toBeInTheDocument();
       }
     }
+    for (const name of [/运行节点 node-prod-1 Fleet Doctor/, /浏览节点 node-prod-1 文件/, /编辑节点 node-prod-1/, /删除节点 node-prod-1/, /打开节点 node-prod-1 Web 终端/, "迁移"]) {
+      expect(scope.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    const trigger = scope.queryByRole("button", { name: "节点 node-prod-1 更多操作" });
+    if (!operate) {
+      expect(trigger).not.toBeInTheDocument();
+      return;
+    }
+    expect(trigger).toBeInTheDocument();
+    await user.click(trigger as HTMLElement);
+    expect(await screen.findByRole("menuitem", { name: /Fleet Doctor/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /文件浏览/ })).toBeInTheDocument();
+    for (const name of [/Web 终端/, /编辑节点/, /迁移/, /删除节点/]) {
+      if (role === "admin") {
+        expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+      } else {
+        expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+      }
+    }
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /Fleet Doctor/ })).not.toBeInTheDocument());
   }
 
-  function expectAdminActions(scope: ReturnType<typeof within>, present: boolean) {
-    const names = [
-      /编辑节点 node-prod-1/,
-      /删除节点 node-prod-1/,
-      /打开节点 node-prod-1 Web 终端/,
-      "迁移",
-    ] as const;
-    for (const name of names) {
-      const button = scope.queryByRole("button", { name });
-      if (present) {
-        expect(button).toBeInTheDocument();
-      } else {
-        expect(button).not.toBeInTheDocument();
-      }
-    }
-  }
+  it("管理员在桌面和移动端卡片使用同一套直出操作与更多菜单", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "admin");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "admin");
+  });
 
   it("操作员在桌面和移动端可以测试、诊断、备份和浏览，不能管理节点", async () => {
     const user = userEvent.setup();
@@ -1287,11 +2127,8 @@ describe("NodesPage", () => {
     renderNodesPage();
 
     const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
-    const mobileCard = within(mobileNodeCard("node-prod-1"));
-    expectOperateActions(desktopCard, true);
-    expectOperateActions(mobileCard, true);
-    expectAdminActions(desktopCard, false);
-    expectAdminActions(mobileCard, false);
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "operator");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "operator");
     expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /查看节点 node-prod-1 日志/ }).length).toBeGreaterThan(0);
 
@@ -1314,7 +2151,7 @@ describe("NodesPage", () => {
       expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, EMERGENCY_PROOF);
     });
     expect(grantMock).not.toHaveBeenCalled();
-    await user.click(desktopCard.getByRole("button", { name: /浏览节点 node-prod-1 文件/ }));
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /文件浏览/);
     expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
   });
 
@@ -1327,10 +2164,8 @@ describe("NodesPage", () => {
 
     const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
     const mobileCard = within(mobileNodeCard("node-prod-1"));
-    expectOperateActions(desktopCard, false);
-    expectOperateActions(mobileCard, false);
-    expectAdminActions(desktopCard, false);
-    expectAdminActions(mobileCard, false);
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "viewer");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "viewer");
     expect(desktopCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
     expect(mobileCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
     expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
@@ -1391,7 +2226,7 @@ describe("NodesPage", () => {
 
     const view = renderNodesPage();
     const card = screen.getByLabelText("节点卡片 node-prod-1");
-    await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+    await clickNodeMenuItem(user, card, "node-prod-1", /删除节点/);
     await waitFor(() => {
       expect(confirmMock).toHaveBeenCalledTimes(1);
     });
@@ -1481,8 +2316,8 @@ describe("NodesPage", () => {
 
   it("新增保存返回前身份往返后不提示、不测试", async () => {
     const user = userEvent.setup();
-    const pendingSave = createDeferred<number>();
-    const createNode = vi.fn<(input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>>(() => pendingSave.promise);
+    const pendingSave = createDeferred<NodeSaveResult | null>();
+    const createNode = vi.fn<(input: NewNodeInput, isCurrent?: () => boolean) => Promise<NodeSaveResult | null>>(() => pendingSave.promise);
     const testNodeConnection = vi.fn();
     createContext({ createNode, testNodeConnection });
 
@@ -1500,7 +2335,7 @@ describe("NodesPage", () => {
     expect(saveStillCurrent()).toBe(false);
 
     await act(async () => {
-      pendingSave.resolve(9);
+      pendingSave.resolve({ id: 9 });
     });
 
     expect(testNodeConnection).not.toHaveBeenCalled();
@@ -1510,13 +2345,13 @@ describe("NodesPage", () => {
 
   it("更新保存失败返回前换 token 后不报错", async () => {
     const user = userEvent.setup();
-    const pendingSave = createDeferred<void>();
-    const updateNode = vi.fn<(id: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>>(() => pendingSave.promise);
+    const pendingSave = createDeferred<NodeSaveResult | null>();
+    const updateNode = vi.fn<(id: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<NodeSaveResult | null>>(() => pendingSave.promise);
     const testNodeConnection = vi.fn();
     createContext({ updateNode, testNodeConnection });
 
     const view = renderNodesPage();
-    await user.click(screen.getAllByRole("button", { name: /编辑节点 node-prod-1/ })[0]);
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
     await user.click(await screen.findByRole("button", { name: "保存并测试" }));
     await waitFor(() => {
       expect(updateNode).toHaveBeenCalledTimes(1);
@@ -1538,7 +2373,7 @@ describe("NodesPage", () => {
   it("保存后的连接测试返回时身份已变则不展示结果", async () => {
     const user = userEvent.setup();
     const pendingTest = createDeferred<NodeConnectionProbeOutcome>();
-    const createNode = vi.fn().mockResolvedValue(9);
+    const createNode = vi.fn().mockResolvedValue({ id: 9 });
     const testNodeConnection = vi.fn(() => pendingTest.promise);
     createContext({ createNode, testNodeConnection });
 
@@ -1584,7 +2419,7 @@ describe("NodesPage", () => {
       createContext();
       const view = renderNodesPage();
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /删除节点/);
       await waitFor(() => {
         expect(confirmMock).toHaveBeenCalled();
       });
@@ -1659,7 +2494,7 @@ describe("NodesPage", () => {
 
   it("CSV 文件读取期间身份往返后不再导入", async () => {
     const pendingText = createDeferred<string>();
-    const createNode = vi.fn().mockResolvedValue(8);
+    const createNode = vi.fn().mockResolvedValue({ id: 8 });
     createContext({ createNode });
     const view = renderNodesPage();
     chooseCsvFile(new DeferredTextFile(pendingText.promise));
@@ -1677,10 +2512,10 @@ describe("NodesPage", () => {
   });
 
   it("CSV 导入中途身份失效后不继续下一行也不提示", async () => {
-    const pendingRow = createDeferred<number>();
+    const pendingRow = createDeferred<NodeSaveResult | null>();
     const createNode = vi.fn()
       .mockImplementationOnce(() => pendingRow.promise)
-      .mockResolvedValue(5);
+      .mockResolvedValue({ id: 5 });
     createContext({ createNode });
     const view = renderNodesPage();
     const csv = [
@@ -1698,7 +2533,7 @@ describe("NodesPage", () => {
     rerenderAuth(view, { role: "admin", token: "next-token" });
     expect(importStillCurrent()).toBe(false);
     await act(async () => {
-      pendingRow.resolve(4);
+      pendingRow.resolve({ id: 4 });
     });
 
     expect(createNode).toHaveBeenCalledTimes(1);
@@ -1708,7 +2543,7 @@ describe("NodesPage", () => {
 
   it("CSV 文件读取期间卸载后不再导入", async () => {
     const pendingText = createDeferred<string>();
-    const createNode = vi.fn().mockResolvedValue(8);
+    const createNode = vi.fn().mockResolvedValue({ id: 8 });
     createContext({ createNode });
     const view = renderNodesPage();
     chooseCsvFile(new DeferredTextFile(pendingText.promise));
@@ -1779,7 +2614,7 @@ describe("NodesPage", () => {
 
     async function openDoctorFromDesktopCard(user: ReturnType<typeof userEvent.setup>, nodeName: string) {
       const card = screen.getByLabelText(`节点卡片 ${nodeName}`);
-      await user.click(within(card).getByRole("button", { name: `运行节点 ${nodeName} Fleet Doctor` }));
+      await clickNodeMenuItem(user, card, nodeName, /Fleet Doctor/);
       return screen.findByRole("dialog", { name: doctorDialogName });
     }
 
@@ -1917,7 +2752,7 @@ describe("NodesPage", () => {
         });
         await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
         const card = screen.getByLabelText("节点卡片 node-prod-1");
-        await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+        await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
         expect(runNodeDoctorMock).toHaveBeenCalledTimes(1);
       } finally {
         act(() => {
@@ -1997,7 +2832,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2017,9 +2852,9 @@ describe("NodesPage", () => {
       const user = userEvent.setup();
       renderNodesPage();
 
-      const mobileDoctor = screen.getAllByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" })[0];
-      expect(mobileDoctor.closest(".md\\:hidden")).not.toBeNull();
-      await user.click(mobileDoctor);
+      const mobileCard = screen.getByRole("article", { name: "node-prod-1" });
+      expect(mobileCard.closest(".md\\:hidden")).not.toBeNull();
+      await clickNodeMenuItem(user, mobileCard, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2055,7 +2890,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       expect(within(dialog).queryByText("当前视图中无法定位连接测试，请关闭此对话框后在节点列表中查找。")).not.toBeInTheDocument();
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
@@ -2072,7 +2907,7 @@ describe("NodesPage", () => {
       const allNodes = nodesRef.current.nodes as Array<{ id: number }>;
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
 
       createContext({ nodes: allNodes.filter((node) => node.id !== 1) });
@@ -2089,7 +2924,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2111,7 +2946,7 @@ describe("NodesPage", () => {
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
       await user.click(within(card).getByRole("button", { name: "测试节点 node-prod-1 连接" }));
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       expect(within(dialog).getByRole("button", { name: "前往连接测试" })).toBeDisabled();
       await act(async () => {

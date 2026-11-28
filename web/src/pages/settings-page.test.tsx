@@ -63,9 +63,6 @@ vi.mock("@/context/theme-context.hooks", () => ({
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
-    getSettings: vi.fn().mockResolvedValue({ definitions: [], values: {} }),
-    updateSettings: vi.fn(),
-    resetSetting: vi.fn(),
     changePassword: vi.fn(),
     exportConfig: vi.fn().mockResolvedValue({}),
     getUsers: vi.fn().mockResolvedValue([]),

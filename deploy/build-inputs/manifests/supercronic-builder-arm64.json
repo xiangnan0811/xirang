@@ -44,11 +44,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "libexpat-2.10.0-r0.apk",
+      "file": "libexpat-2.11.0-r0.apk",
       "name": "libexpat",
-      "sha256": "99144fe0b1bb9316a3bc30c38707996767806661f4a0456fcf4565ac92e79b0f",
-      "size": 63387,
-      "version": "2.10.0-r0"
+      "sha256": "cf19455af9c5c9dcd3915294d299f743553855519431bba38577b8c4a23c4373",
+      "size": 65810,
+      "version": "2.11.0-r0"
     },
     {
       "arch": "aarch64",
@@ -100,11 +100,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "zstd-libs-1.5.7-r2.apk",
+      "file": "zstd-libs-1.6.0-r1.apk",
       "name": "zstd-libs",
-      "sha256": "2bb5136c89f5b0bbe1554c8915a3b520d5aa63ae2a51d4d821eb81698db5a818",
-      "size": 365383,
-      "version": "1.5.7-r2"
+      "sha256": "923a9b5fffbc8272ce65b67fa7f768a9e3ea55c395b36030dc11635f29645eae",
+      "size": 337611,
+      "version": "1.6.0-r1"
     }
   ],
   "base_source_digest": "sha256:e8e55b7bf3a0faeba720580aa7e4acc04d516e424a5b275eee4f55e98f28dffd",
@@ -279,7 +279,7 @@
     {
       "arch": "aarch64",
       "name": "libexpat",
-      "version": "2.10.0-r0"
+      "version": "2.11.0-r0"
     },
     {
       "arch": "aarch64",
@@ -339,7 +339,7 @@
     {
       "arch": "aarch64",
       "name": "zstd-libs",
-      "version": "1.5.7-r2"
+      "version": "1.6.0-r1"
     }
   ],
   "installer_sha256": "3dd03b3e5dfd6be3fd09ae0ba9b091626aa7c7cf20e0c853607716a135e444f5",

@@ -73,6 +73,13 @@ func migrateConfigAssetGraphDB(t *testing.T, db *gorm.DB) {
 		&model.BackupRetentionPolicy{},
 		&model.RecoveryPointHold{},
 		&model.BackupAssetConfigImportRef{},
+		&model.BackupAssetManagedHistoryLatch{},
+		&model.PolicyNode{},
+		&model.NodeOwner{},
+		&model.Silence{},
+		&model.AnomalyEvent{},
+		&model.TaskRun{},
+		&model.TaskCronOccurrence{},
 	); err != nil {
 		t.Fatalf("migrate config asset graph: %v", err)
 	}

@@ -13,7 +13,9 @@
 - policy、模板克隆和导入均保留显式 `enabled=false`；policy 还保留 `verify_enabled=false`、`max_retries=0`。模板克隆始终禁用；省略字段才使用默认，零重试不自动重跑；持久化仍执行加密 hook。
 - 策略仍被任一任务引用时，转为模板返回 409，包括任务已归档或同次请求清空策略节点关联的情况。任务创建和更新拒绝新绑定模板。既有模板关联可保留，模板可转为普通策略，已有调度仍按现有启用与暂停规则执行。
 - 新 policy Rsync 目标为 `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`。持久化 ID 隔离 writer，不能靠 source basename 或可改节点名称。同步/改名不改已有 target；路径变化不证明历史数据已经迁移。Core 本地准入拒绝规范路径冲突、symlink alias 和祖先/后代归属重叠。
-- 节点迁移要求相关任务禁用、无调度及无活动 durable run；只把独立归属的源复制到全新隔离目标，验证后在锁下重核归属/配置再切换 DB。共享源及已有目标拒绝合并，保留原源。导入补偿先在全局/policy/task 锁下捕获 before-image，再核对当前 claim 与导入后行；并发变化或旧目标的新 owner 均拒绝补偿覆盖，不强制恢复旧 locator。
+- 节点 `backup_dir` 是备份目录标识。创建时留空按节点名称生成，编辑时改名不会自动生成标识。`PUT /api/v1/nodes/:id` 省略或传入纯空白值时保留原标识。历史节点的标识若为空字符串，编辑时必须填写有效标识，否则返回 400。显式保存不同的标识时，响应通过可选的 `data.warning` 提示已有备份数据不会自动迁移。任务继续使用各自的目标配置，节点编辑器指引用户到任务配置查看实际路径。
+- 节点迁移要求相关任务禁用、无调度及无活动 durable run；只把独立归属的源复制到全新隔离目标，验证后在锁下重核归属、节点和配置再切换 DB。共享源及已有目标拒绝合并，保留原源。导入补偿只撤销本次写入的行，在目标归属锁内核对导入后的值以及恢复后的任务依赖、节点、策略与目标归属。并发变化、后来建立的引用或旧目标的新 owner 均阻断整笔补偿。
+- 单个或批量删除节点时，节点若仍被启用演练的策略用作目标，返回 409。批量请求中的任一此类引用阻断整批删除。
 - Restic `repository_version` 仅选择新仓库格式（默认/1/2），不是 append-only 或删除保护。旧 `append_only=true/false` 在加密配置边界分别幂等转为 2/默认，保留其他字段，冲突或非法值隔离诊断；旧字段只允许显式导入转换，不再作为运行时配置。删除保护须在存储后端独立验证。
 - Rsync allowlist 依赖 Linux Landlock ABI 3、匹配本地/远端 helper 及私有 user/mount namespace；运行环境不满足时失败关闭，不能移除 allowlist 或自动授予 privileged。受管 hardlink staging 要预留完整树容量和传输空间。可选 Worker 的精确系统包版本影响工具链 fingerprint，Core/Worker 必须由同一发布源码重建并匹配；细节见[处理与导出](backup-processing-export.md)。
 

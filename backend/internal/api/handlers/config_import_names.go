@@ -262,7 +262,7 @@ func loadConfigImportCredentialInventory(
 	nodeQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.Node{})
 	keyQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.SSHKey{})
 	if forUpdate && !strings.EqualFold(db.Name(), "sqlite") {
-		locking := clause.Locking{Strength: "UPDATE"}
+		locking := clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}
 		nodeQuery = nodeQuery.Clauses(locking)
 		keyQuery = keyQuery.Clauses(locking)
 	}
@@ -332,6 +332,10 @@ func lockConfigImportCredentialInventory(tx *gorm.DB, data configImportData) (*c
 	}
 	if strings.EqualFold(tx.Name(), "sqlite") {
 		if err := tx.Exec("UPDATE nodes SET id = id WHERE 1 = 0").Error; err != nil {
+			return nil, fmt.Errorf("保留导入节点写锁失败: %w", err)
+		}
+	} else if len(data.Nodes) > 0 && strings.EqualFold(tx.Name(), "postgres") {
+		if err := tx.Exec("LOCK TABLE nodes IN ROW EXCLUSIVE MODE").Error; err != nil {
 			return nil, fmt.Errorf("保留导入节点写锁失败: %w", err)
 		}
 	}
@@ -755,7 +759,7 @@ func applyImportedNodeFields(target *model.Node, data map[string]interface{}) {
 		target.Tags = tags
 	}
 	if basePath, ok := data["base_path"].(string); ok {
-		target.BasePath = strings.TrimSpace(basePath)
+		target.BasePath = basePath
 	}
 }
 
@@ -978,6 +982,7 @@ func applyImportedSSHKeyCandidate(
 	if err := tx.Save(&candidate.row).Error; err != nil {
 		return fmt.Errorf("保存导入 SSH 密钥失败: %w", err)
 	}
+	accumulator.recordWrite(configImportEntitySSHKeys, candidate.row.ID)
 	inventory.replaceKey(candidate.row)
 	accumulator.updated(configImportEntitySSHKeys)
 	return nil
@@ -1009,7 +1014,7 @@ func createImportedSSHKey(
 	if err := tx.Create(&candidate.row).Error; err != nil {
 		return fmt.Errorf("创建导入 SSH 密钥失败: %w", err)
 	}
-	accumulator.recordCreatedID(configImportEntitySSHKeys, candidate.row.ID)
+	accumulator.recordWrite(configImportEntitySSHKeys, candidate.row.ID)
 	accumulator.created(configImportEntitySSHKeys, candidate.row.Disabled)
 	return nil
 }

@@ -193,9 +193,18 @@ export interface NodeRecord {
   basePath?: string;
   status: NodeStatus;
   tags: string[];
+  /** Server `tags` string exactly as returned; the editor resends it when tags are not edited. */
+  rawTags?: string;
   /** Latest manual connection test. Empty when this node has not been tested. */
   lastSeenAt: string;
+  /** Latest backup, formatted for display and CSV export. */
   lastBackupAt: string;
+  /**
+   * Exact instant of the latest backup, parsed from the server timestamp before formatting: whole signed
+   * epoch seconds plus nanoseconds (offset and sub-millisecond precision intact). Sort key only; omitted
+   * when there is no valid backup time.
+   */
+  lastBackupInstant?: { epochSeconds: number; nanoseconds: number };
   connectionLatencyMs?: number;
   maintenanceStart?: string;
   maintenanceEnd?: string;
@@ -203,6 +212,34 @@ export interface NodeRecord {
   archived?: boolean;
   backupDir?: string;
   useSudo?: boolean;
+  /**
+   * Opaque identity of the latest applied connection test, present only while that result still
+   * matches the node's current configuration and credential. Only the node detail read carries it;
+   * list reads never do.
+   */
+  probeToken?: string;
+  /**
+   * Opaque revision of the node's persisted configuration. Editors send the revision they opened as
+   * `expectedRevision`, so a save from an older form cannot overwrite later changes. Legacy servers omit it.
+   */
+  revision?: string;
+  /**
+   * Outcome of the latest completed connection test. `current` is false once the connection settings or
+   * credential changed after that test, so the outcome is history rather than evidence about the
+   * current configuration. Omitted when no applied outcome is recorded.
+   */
+  connectionTest?: NodeConnectionTest;
+}
+
+export interface NodeConnectionTest {
+  status: "online" | "offline";
+  current: boolean;
+}
+
+/** A committed node write: the node's id and the configuration revision it produced (legacy servers and demo omit it). */
+export interface NodeSaveResult {
+  id: number;
+  revision?: string;
 }
 
 export type NodeDoctorCheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -228,11 +265,22 @@ export interface NodeHostKeyInfo {
   fingerprintSha256: string;
 }
 
+/**
+ * Why a connection test result no longer describes its node:
+ * - `superseded`: a newer local test, a node mutation or an identity change owns the node; show nothing.
+ * - `retest`: the server no longer accepts this result as current; offer a retest and never trust its host key.
+ */
+export type NodeConnectionProbeStale = "superseded" | "retest";
+
 export interface NodeConnectionProbeOutcome {
   ok: boolean;
   message: string;
+  /** Set when the result is stale; a stale outcome carries no host key or probe token. */
+  stale?: NodeConnectionProbeStale;
   errorCode?: NodeHostKeyIssueCode;
   hostKey?: NodeHostKeyInfo;
+  /** Opaque identity of the applied result; host key trust sends it back. Legacy servers omit it. */
+  probeToken?: string;
 }
 
 export type RestoreDrillStatus = "pending" | "running" | "success" | "failed" | "skipped" | "canceled";
@@ -832,6 +880,8 @@ export interface NewNodeInput {
   expiryDate?: string;
   backupDir?: string;
   useSudo?: boolean;
+  /** Revision the editor opened; a mismatch is refused as `node_revision_conflict`. Update only. */
+  expectedRevision?: string;
 }
 
 /** Ordinary password login: a main session or a pending second-factor step. */

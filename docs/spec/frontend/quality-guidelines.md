@@ -96,8 +96,17 @@ SSH 密钥轮换的请求、响应解码与错误类型位于 `lib/api/ssh-key-r
 工厂加载结果；若懒加载页面或其子模块已静态引用该模块（例如 SLO 页面引用 `parseSLOTags`），模块随页面 chunk 加载，
 代理只复用已加载模块。模块加载失败时该次调用以拒绝结束，由页面现有请求错误处理呈现；同一页面生命周期内
 后续经 `apiClient` 的调用复用该失败结果，刷新页面后重新加载。
+系统设置（`settings-api.ts`）与告警升级策略（`escalation.ts`）不并入 `apiClient`：只由懒加载路由的页面与子组件
+（系统设置页、升级策略页及其编辑器、策略编辑对话框、告警详情升级时间线、SLO 面板）静态导入工厂，并在模块顶层
+各自调用 `createSettingsApi()` / `createEscalationApi()`，模块随所属懒加载 chunk 加载；启动可达模块不得运行时导入
+这两个模块（如确需其类型只能用 `import type`）。测试需替换其请求时 mock 对应工厂模块，而非 `apiClient`。
 自动化规则页直接使用 `createAutomationRulesApi()`，不并入 `apiClient`。启动可达代码需要的 API（节点、任务、策略、
 告警、集成、SSH 密钥、认证/TOTP、凭据授权等）保持静态组合；新增页面专用 API 不得静态并入启动 bundle。
+
+Tailwind 扫描源只由 `index.css` 声明：`@source "."`、`@source "../index.html"` 与 `@source not "./**/*.test.{ts,tsx}"`。
+`tailwind.config.ts` 不设 `content`（旧版 glob 会重新加入测试文件）；只在测试中出现的类名不会生成样式，生产用到的类必须出现在非测试源码中。
+
+生产 Service Worker 仅读取及写入具有 JavaScript 内容类型的脚本缓存响应。缺失脚本恢复后，重新加载页面会重新请求此前收到 HTML 的资产。
 
 ## 时间稳定夹具
 

@@ -6999,7 +6999,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回所有节点列表，operator 仅返回自己负责的节点",
+                "description": "返回所有节点列表，operator 仅返回自己负责的节点；connection_test 描述最近完成的探测及其是否适用于当前连接配置。",
                 "produces": [
                     "application/json"
                 ],
@@ -7051,7 +7051,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "添加新的服务器节点",
+                "description": "添加新的服务器节点。maintenance_start、maintenance_end 和 expiry_date 可省略或为 null；空字符串表示清除，其他值必须是 RFC3339。维护时间必须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。expiry_date 可早于当前时间。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7114,7 +7114,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "批量删除多个节点及其关联的策略关联、任务、告警",
+                "description": "批量删除多个节点及其策略关联、任务、告警；有启用的演练引用时拒绝整批删除。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7154,6 +7154,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
                     }
                 }
             }
@@ -7165,7 +7171,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回单个节点的详细信息",
+                "description": "返回节点详情，connection_test 描述最近完成的探测及其是否适用于当前连接配置；当前配置仍匹配最近生效探测且没有更新受理的探测时附带 probe_token。",
                 "produces": [
                     "application/json"
                 ],
@@ -7194,7 +7200,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Node"
+                                            "$ref": "#/definitions/internal_api_handlers.nodeGetResponse"
                                         }
                                     }
                                 }
@@ -7221,7 +7227,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "更新节点配置信息",
+                "description": "更新节点配置信息。expected_revision 省略或为 null 时兼容旧客户端；提供时必须为 32 位小写十六进制，版本冲突返回 409 node_revision_conflict。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7286,6 +7292,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
                     }
                 }
             },
@@ -7295,7 +7307,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "删除指定节点及其关联的策略关联、任务、告警",
+                "description": "删除指定节点及其策略关联、任务、告警；有启用的演练引用时拒绝删除。",
                 "produces": [
                     "application/json"
                 ],
@@ -7327,6 +7339,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7530,11 +7548,29 @@ const docTemplate = `{
                         "description": "目录路径（默认 /）",
                         "name": "path",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 且未提供 path 时自动选择初始目录",
+                        "name": "initial",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 时保留绝对 path 的空白字符",
+                        "name": "path_exact",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7553,6 +7589,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7595,6 +7637,12 @@ const docTemplate = `{
                         "name": "path",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "值为 1 时保留绝对 path 的空白字符",
+                        "name": "path_exact",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -8033,7 +8081,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间",
+                "description": "测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。expected_revision 不匹配时不受理或连接；无效值返回 400。",
                 "produces": [
                     "application/json"
                 ],
@@ -8048,11 +8096,23 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "保存后的节点版本，32 位小写十六进制",
+                        "name": "expected_revision",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -8079,7 +8139,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "重新读取节点当前主机密钥（不发送任何凭据），仅当其 SHA256 指纹与提交值一致且 known_hosts 中没有冲突记录时写入 known_hosts。仅管理员可用。",
+                "description": "重新读取节点当前主机密钥（不发送任何凭据），仅当 SHA256 指纹一致且 known_hosts 无冲突记录时写入。可提供 probe_token，结果过时返回 409 node_probe_stale。仅管理员可用。",
                 "consumes": [
                     "application/json"
                 ],
@@ -20537,13 +20597,8 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api_handlers.nodeRequest": {
+        "internal_api_handlers.nodeGetResponse": {
             "type": "object",
-            "required": [
-                "host",
-                "name",
-                "username"
-            ],
             "properties": {
                 "archived": {
                     "type": "boolean"
@@ -20557,10 +20612,33 @@ const docTemplate = `{
                 "base_path": {
                     "type": "string"
                 },
+                "connection_latency_ms": {
+                    "description": "Last completed manual connection-test latency, or zero on failure.",
+                    "type": "integer"
+                },
+                "connection_test": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.NodeConnectionTest"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
                 "expiry_date": {
                     "type": "string"
                 },
                 "host": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "last_backup_at": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "description": "Time of the last completed manual connection test.",
                     "type": "string"
                 },
                 "maintenance_end": {
@@ -20581,11 +20659,97 @@ const docTemplate = `{
                 "private_key": {
                     "type": "string"
                 },
+                "probe_token": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "ssh_key": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.SSHKey"
+                },
                 "ssh_key_id": {
                     "type": "integer"
                 },
                 "status": {
+                    "description": "Legacy status, normally the last manual connection-test result.",
                     "type": "string"
+                },
+                "tags": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "use_sudo": {
+                    "type": "boolean"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.nodeRequest": {
+            "type": "object",
+            "required": [
+                "host",
+                "name",
+                "username"
+            ],
+            "properties": {
+                "archived": {
+                    "type": "boolean"
+                },
+                "auth_type": {
+                    "type": "string"
+                },
+                "backup_dir": {
+                    "type": "string"
+                },
+                "base_path": {
+                    "description": "BasePath is empty or an absolute POSIX path with no NUL, complete .. component, or leading/trailing Unicode whitespace. Create accepts empty as unset; update retains the existing value when omitted, null, empty, or repeated unchanged.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "expected_revision": {
+                    "description": "ExpectedRevision is optional or null for legacy updates; a supplied value must be 32 lowercase hexadecimal characters.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "expiry_date": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "host": {
+                    "type": "string"
+                },
+                "maintenance_end": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "maintenance_start": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "name": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "private_key": {
+                    "type": "string"
+                },
+                "ssh_key_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status accepts exactly online, warning, or offline. Other nonempty values return 400. Omitted, null, or empty values default to offline on create and preserve the stored status on update.",
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "tags": {
                     "type": "string"
@@ -21620,6 +21784,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "fingerprint_sha256": {
+                    "type": "string"
+                },
+                "probe_token": {
                     "type": "string"
                 }
             }
@@ -26871,8 +27038,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "connection_latency_ms": {
-                    "description": "Most recent successful manual connection-test latency.",
+                    "description": "Last completed manual connection-test latency, or zero on failure.",
                     "type": "integer"
+                },
+                "connection_test": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.NodeConnectionTest"
                 },
                 "created_at": {
                     "type": "string"
@@ -26893,7 +27063,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_seen_at": {
-                    "description": "Most recent successful manual connection test.",
+                    "description": "Time of the last completed manual connection test.",
                     "type": "string"
                 },
                 "maintenance_end": {
@@ -26914,6 +27084,9 @@ const docTemplate = `{
                 "private_key": {
                     "type": "string"
                 },
+                "revision": {
+                    "type": "string"
+                },
                 "ssh_key": {
                     "$ref": "#/definitions/xirang_backend_internal_model.SSHKey"
                 },
@@ -26921,7 +27094,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "status": {
-                    "description": "Most recent manual connection-test result, not live availability.",
+                    "description": "Legacy status, normally the last manual connection-test result.",
                     "type": "string"
                 },
                 "tags": {
@@ -26934,6 +27107,17 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_model.NodeConnectionTest": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "type": "boolean"
+                },
+                "status": {
                     "type": "string"
                 }
             }

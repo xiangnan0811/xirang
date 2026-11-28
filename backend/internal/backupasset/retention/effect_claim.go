@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/internal/authoritylock"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 
@@ -39,11 +40,35 @@ const (
 	providerDeleteStageAudit        providerDeleteStage = "audit_emit"
 )
 
-// errProviderDeletePreparationAuthority is returned after a blocking
-// preparation step when the locked lifecycle authority is no longer current.
-// It deliberately aborts Tx1 instead of converting a pre-claim race into a
-// durable observational block.
+// errProviderDeletePreparationAuthority aborts Tx1 when a blocking step or
+// repository authority gate fails or the projected authority has changed.
+// It prevents a transient pre-claim failure from becoming a durable block.
 var errProviderDeletePreparationAuthority = errors.New("provider-delete preparation authority changed")
+
+// Preserve the database cause for classification without exposing its message.
+type providerDeletePreparationDatabaseError struct{ cause error }
+
+func (err providerDeletePreparationDatabaseError) Error() string {
+	return "provider-delete preparation database authority failed"
+}
+
+func (err providerDeletePreparationDatabaseError) Unwrap() []error {
+	return []error{errProviderDeletePreparationAuthority, err.cause}
+}
+
+func isProviderDeletePostgresOperationalError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var state interface{ SQLState() string }
+	if errors.As(err, &state) {
+		switch state.SQLState() {
+		case "57014", "55P03", "40P01", "40001":
+			return true
+		}
+	}
+	return false
+}
 
 // ErrEffectClaimInFlight is a pure loser observation. Callers must not turn it
 // into a blocked lifecycle fact or update retry_at.
@@ -227,6 +252,10 @@ func (adapter *RegistryPointDeletion) Prepare(
 	}
 	resolved, err := adapter.resolve.ResolveDeletePoint(ctx, tx, request, rows.point, rows.repository)
 	if err != nil {
+		if tx.Name() == "postgres" && backupasset.ProviderKind(rows.repository.ProviderKind) == backupasset.ProviderRsync &&
+			isProviderDeletePostgresOperationalError(err) {
+			return prepared, providerDeletePreparationDatabaseError{cause: err}
+		}
 		return prepared, fmt.Errorf("%s: %w", providerDeleteStageClaimObserve, mapProviderDeletionError(err))
 	}
 	if err := validateProviderDeleteRowsUnchangedTx(ctx, tx, rows.point, rows.repository); err != nil {
@@ -331,6 +360,10 @@ func validateProviderDeleteRowsUnchangedTx(
 		Where("id = ?", repository.ID).
 		Limit(1).
 		Find(&currentRepository)
+	if loaded.Error != nil && tx.Name() == "postgres" && backupasset.ProviderKind(repository.ProviderKind) == backupasset.ProviderRsync &&
+		isProviderDeletePostgresOperationalError(loaded.Error) {
+		return providerDeletePreparationDatabaseError{cause: loaded.Error}
+	}
 	if loaded.Error != nil || loaded.RowsAffected != 1 {
 		return lifecycleDeleteIdentityConflict("lifecycle repository changed during preparation")
 	}
@@ -340,6 +373,10 @@ func validateProviderDeleteRowsUnchangedTx(
 		Where("id = ?", point.ID).
 		Limit(1).
 		Find(&currentPoint)
+	if loaded.Error != nil && tx.Name() == "postgres" && backupasset.ProviderKind(repository.ProviderKind) == backupasset.ProviderRsync &&
+		isProviderDeletePostgresOperationalError(loaded.Error) {
+		return providerDeletePreparationDatabaseError{cause: loaded.Error}
+	}
 	if loaded.Error != nil || loaded.RowsAffected != 1 {
 		return lifecycleDeleteIdentityConflict("lifecycle recovery point changed during preparation")
 	}
@@ -552,49 +589,127 @@ type providerDeleteRows struct {
 	leaseFound     bool
 }
 
-func lockProviderDeleteRowsByAttemptTx(ctx context.Context, tx *gorm.DB, attemptID string) (providerDeleteRows, error) {
-	var rows providerDeleteRows
+func providerDeleteAttemptPointReferenceTx(ctx context.Context, tx *gorm.DB, attemptID string, authority bool) (string, error) {
 	if tx == nil || backupasset.ValidateOpaqueID(attemptID) != nil {
-		return rows, fmt.Errorf("%s: %w: invalid lifecycle attempt", providerDeleteStagePreClaim, backupasset.ErrInvalidState)
+		return "", fmt.Errorf("%s: %w: invalid lifecycle attempt", providerDeleteStagePreClaim, backupasset.ErrInvalidState)
 	}
 	var reference struct{ RecoveryPointID string }
 	loaded := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).Select("recovery_point_id").Where("id = ?", attemptID).Limit(1).Find(&reference)
 	if loaded.Error != nil {
-		return rows, fmt.Errorf("%s: resolve lifecycle attempt point: %w", providerDeleteStagePreClaim, loaded.Error)
+		if authority {
+			return "", fmt.Errorf("%w: resolve lifecycle attempt point: %w", errProviderDeletePreparationAuthority, loaded.Error)
+		}
+		return "", fmt.Errorf("%s: resolve lifecycle attempt point: %w", providerDeleteStagePreClaim, loaded.Error)
 	}
 	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(reference.RecoveryPointID) != nil {
-		return rows, fmt.Errorf("%s: %w: lifecycle attempt", providerDeleteStagePreClaim, backupasset.ErrNotFound)
+		return "", fmt.Errorf("%s: %w: lifecycle attempt", providerDeleteStagePreClaim, backupasset.ErrNotFound)
 	}
-	return lockProviderDeleteRowsTx(ctx, tx, LifecyclePointRequest{RecoveryPointID: reference.RecoveryPointID, AttemptID: attemptID}, true)
+	return reference.RecoveryPointID, nil
+}
+
+func providerDeletePointRepositoryReferenceTx(ctx context.Context, tx *gorm.DB, pointID string, identityOnMissing, authority bool) (string, error) {
+	if tx == nil {
+		return "", fmt.Errorf("%s: %w: transaction unavailable", providerDeleteStagePreClaim, backupasset.ErrInvalidState)
+	}
+	var reference struct{ RepositoryID string }
+	loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).Select("repository_id").Where("id = ?", pointID).Limit(1).Find(&reference)
+	if loaded.Error != nil {
+		if authority {
+			return "", fmt.Errorf("%w: load lifecycle point repository: %w", errProviderDeletePreparationAuthority, loaded.Error)
+		}
+		return "", fmt.Errorf("%s: load lifecycle point repository: %w", providerDeleteStagePreClaim, loaded.Error)
+	}
+	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(reference.RepositoryID) != nil {
+		if identityOnMissing {
+			return "", lifecycleDeleteIdentityConflict("lifecycle recovery point changed")
+		}
+		return "", fmt.Errorf("%s: %w: lifecycle recovery point", providerDeleteStagePreClaim, backupasset.ErrNotFound)
+	}
+	return reference.RepositoryID, nil
+}
+
+func lockProviderDeleteRowsByAttemptTx(ctx context.Context, tx *gorm.DB, attemptID string) (providerDeleteRows, error) {
+	pointID, err := providerDeleteAttemptPointReferenceTx(ctx, tx, attemptID, false)
+	if err != nil {
+		return providerDeleteRows{}, err
+	}
+	return lockProviderDeleteRowsTx(ctx, tx, LifecyclePointRequest{RecoveryPointID: pointID, AttemptID: attemptID}, true)
+}
+
+// lockProviderDeleteRowsForResolverTx pins the PostgreSQL routing identity
+// before locking shared rows. Only Rsync needs the recovery authority gate;
+// every provider is rechecked so a changed route cannot bypass that gate.
+func lockProviderDeleteRowsForResolverTx(ctx context.Context, tx *gorm.DB, attemptID string) (providerDeleteRows, error) {
+	if tx == nil || tx.Name() != "postgres" {
+		return lockProviderDeleteRowsByAttemptTx(ctx, tx, attemptID)
+	}
+	var rows providerDeleteRows
+	pointID, err := providerDeleteAttemptPointReferenceTx(ctx, tx, attemptID, true)
+	if err != nil {
+		return rows, err
+	}
+	repositoryID, err := providerDeletePointRepositoryReferenceTx(ctx, tx, pointID, true, true)
+	if err != nil {
+		return rows, err
+	}
+	var repositoryReference struct{ ProviderKind string }
+	loaded := tx.WithContext(ctx).Model(&model.BackupRepository{}).Select("provider_kind").Where("id = ?", repositoryID).Limit(1).Find(&repositoryReference)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("%w: load lifecycle repository provider: %w", errProviderDeletePreparationAuthority, loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		return rows, fmt.Errorf("%s: %w: lifecycle repository", providerDeleteStagePreClaim, backupasset.ErrNotFound)
+	}
+	rsync := backupasset.ProviderKind(repositoryReference.ProviderKind) == backupasset.ProviderRsync
+	if rsync {
+		if err := authoritylock.LockRepository(ctx, tx, repositoryID); err != nil {
+			return rows, providerDeletePreparationDatabaseError{cause: err}
+		}
+	}
+	request := LifecyclePointRequest{RecoveryPointID: pointID, AttemptID: attemptID}
+	rows, err = lockProviderDeleteRowsForRepositoryTx(ctx, tx, request, repositoryID, true, rsync)
+	if err != nil {
+		return rows, err
+	}
+	if rows.attempt.ID != attemptID || rows.attempt.RecoveryPointID != pointID ||
+		rows.point.ID != pointID || rows.point.RepositoryID != repositoryID ||
+		rows.repository.ID != repositoryID || rows.repository.ProviderKind != repositoryReference.ProviderKind {
+		return rows, fmt.Errorf("%w: lifecycle repository routing identity changed", errProviderDeletePreparationAuthority)
+	}
+	return rows, nil
 }
 
 func lockProviderDeleteRowsTx(ctx context.Context, tx *gorm.DB, request LifecyclePointRequest, identityOnMissing bool) (providerDeleteRows, error) {
+	repositoryID, err := providerDeletePointRepositoryReferenceTx(ctx, tx, request.RecoveryPointID, identityOnMissing, false)
+	if err != nil {
+		return providerDeleteRows{}, err
+	}
+	return lockProviderDeleteRowsForRepositoryTx(ctx, tx, request, repositoryID, false, false)
+}
+
+func lockProviderDeleteRowsForRepositoryTx(ctx context.Context, tx *gorm.DB, request LifecyclePointRequest, repositoryID string, postgresRoute, rsync bool) (providerDeleteRows, error) {
 	var rows providerDeleteRows
-	if tx == nil {
-		return rows, fmt.Errorf("%s: %w: transaction unavailable", providerDeleteStagePreClaim, backupasset.ErrInvalidState)
-	}
-	var pointReference struct{ RepositoryID string }
-	loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).Select("repository_id").Where("id = ?", request.RecoveryPointID).Limit(1).Find(&pointReference)
-	if loaded.Error != nil {
-		return rows, fmt.Errorf("%s: load lifecycle point repository: %w", providerDeleteStagePreClaim, loaded.Error)
-	}
-	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(pointReference.RepositoryID) != nil {
-		if identityOnMissing {
-			return rows, lifecycleDeleteIdentityConflict("lifecycle recovery point changed")
-		}
-		return rows, fmt.Errorf("%s: %w: lifecycle recovery point", providerDeleteStagePreClaim, backupasset.ErrNotFound)
-	}
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", pointReference.RepositoryID).Limit(1).Find(&rows.repository)
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", repositoryID).Limit(1).Find(&rows.repository)
 	if loaded.Error != nil || loaded.RowsAffected != 1 {
 		if loaded.Error != nil {
-			return rows, fmt.Errorf("%s: lock lifecycle repository: %w", providerDeleteStagePreClaim, loaded.Error)
+			return rows, providerDeleteRowLockError("lock lifecycle repository", loaded.Error, rsync)
+		}
+		if postgresRoute {
+			return rows, fmt.Errorf("%w: lifecycle repository routing identity changed", errProviderDeletePreparationAuthority)
 		}
 		return rows, fmt.Errorf("%s: %w: lifecycle repository", providerDeleteStagePreClaim, backupasset.ErrNotFound)
 	}
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.RecoveryPointID).Limit(1).Find(&rows.point)
+	pointQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.RecoveryPointID)
+	if postgresRoute {
+		pointQuery = pointQuery.Where("repository_id = ?", repositoryID)
+	}
+	loaded = pointQuery.Limit(1).Find(&rows.point)
 	if loaded.Error != nil || loaded.RowsAffected != 1 {
 		if loaded.Error != nil {
-			return rows, fmt.Errorf("%s: lock lifecycle point: %w", providerDeleteStagePreClaim, loaded.Error)
+			return rows, providerDeleteRowLockError("lock lifecycle point", loaded.Error, rsync)
+		}
+		if postgresRoute {
+			return rows, fmt.Errorf("%w: lifecycle repository routing identity changed", errProviderDeletePreparationAuthority)
 		}
 		return rows, fmt.Errorf("%s: %w: lifecycle point", providerDeleteStagePreClaim, backupasset.ErrNotFound)
 	}
@@ -604,7 +719,10 @@ func lockProviderDeleteRowsTx(ctx context.Context, tx *gorm.DB, request Lifecycl
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND recovery_point_id = ?", request.AttemptID, request.RecoveryPointID).Limit(1).Find(&rows.attempt)
 	if loaded.Error != nil || loaded.RowsAffected != 1 {
 		if loaded.Error != nil {
-			return rows, fmt.Errorf("%s: lock lifecycle attempt: %w", providerDeleteStagePreClaim, loaded.Error)
+			return rows, providerDeleteRowLockError("lock lifecycle attempt", loaded.Error, rsync)
+		}
+		if postgresRoute {
+			return rows, fmt.Errorf("%w: lifecycle repository routing identity changed", errProviderDeletePreparationAuthority)
 		}
 		return rows, lifecycleDeleteIdentityConflict("lifecycle attempt changed")
 	}
@@ -619,7 +737,7 @@ func lockProviderDeleteRowsTx(ctx context.Context, tx *gorm.DB, request Lifecycl
 			loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ?", leaseID).Limit(1).Find(&rows.lease)
 			if loaded.Error != nil {
-				return rows, fmt.Errorf("%s: lock lifecycle lease: %w", providerDeleteStagePreClaim, loaded.Error)
+				return rows, providerDeleteRowLockError("lock lifecycle lease", loaded.Error, rsync)
 			}
 			rows.leaseFound = loaded.RowsAffected == 1
 		}
@@ -629,15 +747,22 @@ func lockProviderDeleteRowsTx(ctx context.Context, tx *gorm.DB, request Lifecycl
 	}
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("attempt_id = ?", rows.attempt.ID).Limit(1).Find(&rows.claim)
 	if loaded.Error != nil {
-		return rows, fmt.Errorf("%s: lock lifecycle effect claim: %w", providerDeleteStagePreClaim, loaded.Error)
+		return rows, providerDeleteRowLockError("lock lifecycle effect claim", loaded.Error, rsync)
 	}
 	rows.claimFound = loaded.RowsAffected == 1
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("recovery_point_id = ? AND terminal_operation = ?", rows.point.ID, rows.attempt.Operation).Limit(1).Find(&rows.tombstone)
 	if loaded.Error != nil {
-		return rows, fmt.Errorf("%s: lock lifecycle tombstone: %w", providerDeleteStagePreClaim, loaded.Error)
+		return rows, providerDeleteRowLockError("lock lifecycle tombstone", loaded.Error, rsync)
 	}
 	rows.tombstoneFound = loaded.RowsAffected == 1
 	return rows, nil
+}
+
+func providerDeleteRowLockError(operation string, err error, rsync bool) error {
+	if rsync {
+		return providerDeletePreparationDatabaseError{cause: err}
+	}
+	return fmt.Errorf("%s: %s: %w", providerDeleteStagePreClaim, operation, err)
 }
 
 // providerDeleteProofFirst validates the durable provider proof before any
@@ -1183,7 +1308,7 @@ func (coordinator *Coordinator) prepareProviderDelete(ctx context.Context, attem
 		ctx = context.Background()
 	}
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockProviderDeleteRowsByAttemptTx(ctx, tx, attemptID)
+		rows, err := lockProviderDeleteRowsForResolverTx(ctx, tx, attemptID)
 		if err != nil {
 			return err
 		}
@@ -1271,6 +1396,9 @@ func (coordinator *Coordinator) prepareProviderDelete(ctx context.Context, attem
 			observerContextErr := observerCtx.Err()
 			observerCancel()
 			observerNow = coordinator.now().UTC()
+			if errors.Is(observerErr, errProviderDeletePreparationAuthority) {
+				return observerErr
+			}
 			if observerContextErr != nil {
 				scheduled, scheduleErr := coordinator.scheduleProviderDeleteRetryTx(
 					ctx, tx, &rows, observerNow,
@@ -1360,6 +1488,9 @@ func (coordinator *Coordinator) prepareProviderDelete(ctx context.Context, attem
 		executionContextErr := executionCtx.Err()
 		executionCancel()
 		if prepareErr != nil {
+			if errors.Is(prepareErr, errProviderDeletePreparationAuthority) {
+				return prepareErr
+			}
 			if executionContextErr != nil ||
 				errors.Is(prepareErr, context.Canceled) ||
 				errors.Is(prepareErr, context.DeadlineExceeded) {
@@ -1841,7 +1972,7 @@ func (coordinator *Coordinator) persistProviderDeleteReceiptWithClaim(ctx contex
 		ctx = context.Background()
 	}
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockProviderDeleteRowsByAttemptTx(ctx, tx, preparation.attempt.ID)
+		rows, err := lockProviderDeleteRowsForResolverTx(ctx, tx, preparation.attempt.ID)
 		if err != nil {
 			return err
 		}

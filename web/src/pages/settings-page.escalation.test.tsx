@@ -70,18 +70,13 @@ vi.mock("@/context/auth-context.hooks", async () => {
   return { useAuth: () => useSyncExternalStore(authStore.subscribe, authStore.get) };
 });
 
-vi.mock("@/lib/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api/client")>("@/lib/api/client");
-  return {
-    ...actual,
-    apiClient: {
-      ...actual.apiClient,
-      listEscalationPolicies: api.list,
-      updateEscalationPolicy: api.update,
-      deleteEscalationPolicy: api.remove,
-    },
-  };
-});
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => ({
+    listEscalationPolicies: api.list,
+    updateEscalationPolicy: api.update,
+    deleteEscalationPolicy: api.remove,
+  }),
+}));
 
 // The real editor has its own identity guard; this stub exposes the onSaved the panel handed to it.
 vi.mock("@/components/escalation-policy-editor", () => ({

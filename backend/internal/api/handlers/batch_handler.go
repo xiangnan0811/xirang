@@ -132,6 +132,11 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		respondConflict(c, "幂等键已用于不同请求或已删除的批次")
 		return
 	}
+	var missingNode *batchNodeMissingError
+	if errors.As(err, &missingNode) {
+		respondBadRequest(c, missingNode.Error())
+		return
+	}
 	if err != nil {
 		respondInternalError(c, err)
 		return

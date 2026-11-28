@@ -108,8 +108,8 @@ function buildContext() {
   };
   nodesRef.current = {
     nodes,
-    createNode: vi.fn().mockResolvedValue(1),
-    updateNode: vi.fn().mockResolvedValue(undefined),
+    createNode: vi.fn().mockResolvedValue({ id: 1 }),
+    updateNode: vi.fn(async (nodeId: number) => ({ id: nodeId })),
     deleteNode: vi.fn().mockResolvedValue(undefined),
     deleteNodes: vi.fn().mockResolvedValue({ deleted: 0, notFoundIds: [] }),
     testNodeConnection: vi.fn().mockResolvedValue({ ok: true, message: "连接成功" }),

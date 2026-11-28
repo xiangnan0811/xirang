@@ -1,6 +1,7 @@
 @import "tailwindcss" source(none);
 @source ".";
 @source "../index.html";
+@source not "./**/*.test.{ts,tsx}";
 @config "../tailwind.config.ts";
 
 @layer base {

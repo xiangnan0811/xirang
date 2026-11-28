@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { toast } from "@/components/ui/toast-sonner";
 import { NodesPage } from "./nodes-page";
 
 const { authRef, clearStepUpProofMock } = vi.hoisted(() => ({
@@ -138,7 +139,8 @@ describe("NodesPage confirm lifetime", () => {
     const user = userEvent.setup();
     const view = renderNodesPage();
     const card = screen.getByLabelText("节点卡片 node-prod-1");
-    await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+    await user.click(within(card).getByRole("button", { name: "节点 node-prod-1 更多操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: /删除节点/ }));
     expect(await screen.findByRole("alertdialog", { name: "确认操作" })).toBeInTheDocument();
     expect(screen.getByText("确认删除节点 node-prod-1 吗？此操作会移除关联任务记录。")).toBeInTheDocument();
     return view;
@@ -192,5 +194,45 @@ describe("NodesPage confirm lifetime", () => {
     );
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(deleteNode).not.toHaveBeenCalled();
+  });
+
+  async function openCsvConfirm(content: string) {
+    sshKeysRef.current.sshKeys = [{ id: "key-1", name: "部署密钥" }];
+    const user = userEvent.setup();
+    const view = renderNodesPage();
+    const file = new File([content], "nodes.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: async () => content });
+    await user.upload(screen.getByLabelText("CSV 导入", { selector: "input" }), file);
+    const dialog = await screen.findByRole("alertdialog", { name: "从 CSV 导入节点？" });
+    return { view, user, dialog };
+  }
+
+  it("确认密钥与授权根后逐行创建，并按实际结果汇总", async () => {
+    const createNode = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 12 });
+    nodesRef.current.createNode = createNode;
+    const { user, dialog } = await openCsvConfirm("existing,node-a\ninvalid,node-b,root,0\nnew,node-c");
+
+    expect(dialog).toHaveAccessibleDescription(/部署密钥\s+和基础路径 \/。.*授权根目录/);
+    expect(createNode).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "确认" }));
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("成功 1，失败 2")));
+    expect(createNode).toHaveBeenCalledTimes(2);
+    expect(createNode).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "new", keyId: "key-1", basePath: "/" }),
+      expect.any(Function),
+    );
+  });
+
+  it("更换会话时撤销待确认的 CSV 导入", async () => {
+    const createNode = vi.fn();
+    nodesRef.current.createNode = createNode;
+    const { view } = await openCsvConfirm("new,node-c");
+
+    authRef.current = { role: "admin", token: "next-token" };
+    view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(createNode).not.toHaveBeenCalled();
   });
 });

@@ -185,12 +185,16 @@ func TestWithBackupAssetMutationFailureReleasesGateAndSnapshotSeesOnlyOldOrNewVa
 	}
 
 	if err := service.WithBackupAssetMutation(context.Background(), func(map[string]string) error {
-		return service.db.Transaction(func(tx *gorm.DB) error {
+		if err := service.db.Transaction(func(tx *gorm.DB) error {
 			if err := service.UpdateWithTx(tx, "backup_assets.search_candidate_limit", "20000"); err != nil {
 				return err
 			}
 			return service.UpdateWithTx(tx, "backup_assets.search_page_size_max", "300")
-		})
+		}); err != nil {
+			return err
+		}
+		service.InvalidateCachedValues([]string{"backup_assets.search_candidate_limit", "backup_assets.search_page_size_max"})
+		return nil
 	}); err != nil {
 		t.Fatalf("mutation gate was not reusable after failure: %v", err)
 	}

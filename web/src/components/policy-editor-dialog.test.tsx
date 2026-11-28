@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PolicyEditorDialog } from "@/components/policy-editor-dialog";
 import { bumpAuthSessionGeneration } from "@/lib/api/core";
+import type { NodeRecord, PolicyRecord } from "@/types/domain";
 
 const authFixture = vi.hoisted(() => ({ token: "FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY" }));
 
@@ -26,10 +27,12 @@ const apiFixture = vi.hoisted(() => {
   return {
     apiClient: {
       [deprecatedMethod]: mocks.deprecatedHookTemplates,
-      listEscalationPolicies: mocks.listEscalationPolicies,
       getProfiles: mocks.getProfiles,
       getCredentials: mocks.getCredentials,
       triggerDrill: mocks.triggerDrill,
+    },
+    escalationApi: {
+      listEscalationPolicies: mocks.listEscalationPolicies,
     },
     mocks,
   };
@@ -40,14 +43,13 @@ const apiMocks = apiFixture.mocks;
 vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
-    t: (key: string) => {
+    t: (key: string, options?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
         "common.cancel": "Cancel",
         "common.saving": "Saving",
         "policyEditor.advancedSettings": "Advanced Settings",
         "policyEditor.appAwareBackup": "App-aware Backup",
         "policyEditor.appProfileNone": "No profile",
-        "policyEditor.backupStorageInfo": "Backup storage info",
         "policyEditor.backupVerify": "Backup Verification",
         "policyEditor.cronExpression": "Cron Expression",
         "policyEditor.descCreate": "Create policy",
@@ -70,13 +72,23 @@ vi.mock("react-i18next", () => ({
         "policyEditor.sourcePathPlaceholder": "/data",
         "policyEditor.submitCreate": "Create",
         "policyEditor.titleCreate": "Create Policy",
+        "policyEditor.titleEdit": "Edit Policy {{name}}",
+        "policyEditor.descEdit": "Edit policy {{name}}",
+        "policyEditor.submitEdit": "Update",
+        "policyEditor.relatedNodes": "Associated Nodes",
+        "policyEditor.relatedNodesSelected": "{{count}} selected",
+        "policyEditor.selectNode": "Select node {{name}}",
+        "policyEditor.targetGuidance.create": "CREATE_TARGET_GUIDANCE",
+        "policyEditor.targetGuidance.edit": "EDIT_TARGET_GUIDANCE",
+        "policyEditor.targetGuidance.template": "TEMPLATE_TARGET_GUIDANCE",
         "policyEditor.drill.title": "Recovery Drill",
         "policyEditor.drill.unavailableTitle": "Recovery drills are unavailable",
         "policyEditor.drill.unavailableDesc": "Production restore drills are disabled.",
         "policyEditor.drill.enable": "Enable automatic recovery drill",
         "policyEditor.drill.trigger": "Trigger drill manually",
       };
-      return labels[key] ?? key;
+      const label = labels[key] ?? key;
+      return label.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name] ?? ""));
     },
   }),
 }));
@@ -89,12 +101,44 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: apiFixture.apiClient,
 }));
 
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => apiFixture.escalationApi,
+}));
+
 vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
   },
 }));
+
+const nodes = [
+  { id: 1, name: "alpha", host: "10.0.0.1", basePath: "/srv/alpha-base", backupDir: "alpha-dir" },
+  { id: 2, name: "beta", host: "10.0.0.2", basePath: "/srv/beta-base", backupDir: "beta-dir" },
+] as unknown as NodeRecord[];
+
+const existingPolicy: PolicyRecord = {
+  id: 7,
+  name: "Nightly",
+  sourcePath: "/data/app",
+  targetPath: "/srv/stored-policy-target",
+  cron: "0 2 * * *",
+  naturalLanguage: "",
+  enabled: true,
+  criticalThreshold: 3,
+  nodeIds: [1],
+  verifyEnabled: false,
+  verifySampleRate: 0,
+  drillEnabled: false,
+  drillCron: "",
+  drillRestorePath: "",
+  drillPreVerify: "",
+  drillVerify: "",
+  drillPostVerify: "",
+  drillAutoCleanup: true,
+};
+
+const guessedPathPattern = /\/backup\/|alpha-dir|beta-dir|alpha-base|beta-base/;
 
 describe("PolicyEditorDialog", () => {
   beforeEach(() => {
@@ -200,4 +244,88 @@ describe("PolicyEditorDialog", () => {
     },
   );
 
+  it("tells new policies that saving assigns targets without guessing per-node paths", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<PolicyEditorDialog open onOpenChange={vi.fn()} onSave={onSave} nodes={nodes} />);
+
+    expect(screen.queryByText("CREATE_TARGET_GUIDANCE")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Policy Name"), "Fresh");
+    await user.type(screen.getByLabelText("Source Path"), "/data/fresh");
+    await user.click(screen.getByRole("checkbox", { name: "Select node alpha" }));
+
+    expect(screen.getByText("CREATE_TARGET_GUIDANCE")).toBeInTheDocument();
+    expect(screen.queryByText(/EDIT_TARGET_GUIDANCE|TEMPLATE_TARGET_GUIDANCE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(guessedPathPattern);
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Fresh",
+      sourcePath: "/data/fresh",
+      targetPath: "/backup",
+      nodeIds: [1],
+    }));
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty("id");
+  });
+
+  it("guides existing policies to task editing as plain text and keeps the stored target in the payload", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PolicyEditorDialog open onOpenChange={vi.fn()} onSave={onSave} editingPolicy={existingPolicy} nodes={nodes} />,
+    );
+
+    expect(screen.getByText("EDIT_TARGET_GUIDANCE")).toBeInTheDocument();
+    expect(screen.queryByText(/CREATE_TARGET_GUIDANCE|TEMPLATE_TARGET_GUIDANCE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(guessedPathPattern);
+
+    const alpha = screen.getByRole("checkbox", { name: "Select node alpha" });
+    await user.click(alpha);
+    expect(alpha).not.toBeChecked();
+    expect(screen.getByText("EDIT_TARGET_GUIDANCE")).toBeInTheDocument();
+    await user.click(alpha);
+    await user.click(screen.getByRole("checkbox", { name: "Select node beta" }));
+    expect(document.body).not.toHaveTextContent(guessedPathPattern);
+
+    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 7,
+      name: "Nightly",
+      sourcePath: "/data/app",
+      targetPath: "/srv/stored-policy-target",
+      nodeIds: [1, 2],
+    }));
+  });
+
+  it("does not claim that saving a template creates tasks or targets", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PolicyEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+        editingPolicy={{ ...existingPolicy, isTemplate: true, nodeIds: [] }}
+      />,
+    );
+
+    expect(screen.getByText("TEMPLATE_TARGET_GUIDANCE")).toBeInTheDocument();
+    expect(screen.queryByText(/CREATE_TARGET_GUIDANCE|EDIT_TARGET_GUIDANCE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(guessedPathPattern);
+
+    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 7,
+      targetPath: "/srv/stored-policy-target",
+      nodeIds: [],
+    }));
+  });
 });

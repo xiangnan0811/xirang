@@ -13,7 +13,6 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
-	"xirang/backend/internal/dbtx"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -401,7 +400,7 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 	var batch model.BatchCommand
 	var dispatches []model.BatchCommandDispatch
 	created := false
-	err = dbtx.WithSQLiteBusyRetryTx(c.Request.Context(), h.db, func(tx *gorm.DB) error {
+	err = batchWriteTransaction(c.Request.Context(), h.db, func(tx *gorm.DB) error {
 		// Replay lookup deliberately precedes source locking: source cleanup must
 		// not turn a committed idempotent request into a new operation.
 		var existing model.BatchCommand
@@ -481,9 +480,6 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 			unionNodeIDs = append(unionNodeIDs, task.NodeID, dispatch.NodeID)
 		}
 		unionNodeIDs = uniqueSortedUint(unionNodeIDs)
-		if err := h.validateBatchRetryAuthorizationTx(c, tx, unionNodeIDs); err != nil {
-			return err
-		}
 
 		// Re-read the requester/key after the Batch -> Task locks. A request
 		// that committed while this transaction waited owns the same identity.
@@ -510,6 +506,17 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 			batch, created = existing, false
 			return nil
 		}
+		nodeByID, err := lockBatchNodes(tx, unionNodeIDs)
+		var missingNode *batchNodeMissingError
+		if errors.As(err, &missingNode) {
+			return errBatchRetrySourceUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		if err := h.validateBatchRetryAuthorizationTx(c, tx, unionNodeIDs); err != nil {
+			return err
+		}
 
 		// Commands are read only after the authorization checks. Re-fetch the
 		// locked rows with their persisted command bytes for source validation.
@@ -524,19 +531,10 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 		for _, task := range tasks {
 			taskByID[task.ID] = task
 		}
-		var nodes []model.Node
-		if err := tx.Select("id", "name", "archived").Where("id IN ?", unionNodeIDs).Find(&nodes).Error; err != nil {
-			return err
-		}
-		if len(nodes) != len(unionNodeIDs) {
-			return errBatchRetrySourceUnavailable
-		}
-		nodeByID := make(map[uint]model.Node, len(nodes))
-		for _, node := range nodes {
+		for _, node := range nodeByID {
 			if node.Archived {
 				return errBatchRetryIneligible
 			}
-			nodeByID[node.ID] = node
 		}
 
 		command := ""
@@ -548,7 +546,8 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 			}
 			dispatch := dispatchByTaskID[source.TaskID]
 			requestedRunID := source.RunID
-			candidate, err := assessBatchRetryEligibility(tx, sourceBatch, task, dispatch, &requestedRunID)
+			lockedNode := nodeByID[dispatch.NodeID]
+			candidate, err := assessBatchRetryEligibilityWithNode(tx, sourceBatch, task, dispatch, &requestedRunID, &lockedNode)
 			if err != nil {
 				return err
 			}
@@ -565,7 +564,7 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 			}
 			batchNodes = append(batchNodes, batchNode{ID: task.NodeID, Name: nodeByID[task.NodeID].Name})
 		}
-		if command == "" || len(batchNodes) != len(sources) {
+		if command == "" {
 			return errBatchRetryIneligible
 		}
 		childSourceID := sourceBatch.ID
@@ -617,7 +616,6 @@ func (h *BatchHandler) createBatchRetry(c *gin.Context, sourceBatchID, key strin
 			return nil
 		}
 		childRequest := batchCommandRequest{Command: command, Name: "重试批次 " + sourceBatch.ID, Retain: sourceBatch.Retain}
-		var err error
 		dispatches, err = insertBatchCommandTasksTx(tx, batch, childRequest, batchNodes, sources)
 		if err != nil {
 			return err
@@ -690,6 +688,12 @@ func (h *BatchHandler) validateBatchRetryAuthorizationTx(c *gin.Context, tx *gor
 }
 
 func assessBatchRetryEligibility(db *gorm.DB, batch model.BatchCommand, task model.Task, dispatch model.BatchCommandDispatch, requestedRunID *uint) (batchRetryEligibility, error) {
+	return assessBatchRetryEligibilityWithNode(db, batch, task, dispatch, requestedRunID, nil)
+}
+
+// A retry passes the node row it locked before its final authorization checks.
+// Read-only eligibility callers can still load the current node on demand.
+func assessBatchRetryEligibilityWithNode(db *gorm.DB, batch model.BatchCommand, task model.Task, dispatch model.BatchCommandDispatch, requestedRunID *uint, lockedNode *model.Node) (batchRetryEligibility, error) {
 	result := batchRetryEligibility{batchRetryEligibilityDTO: batchRetryEligibilityDTO{TaskID: task.ID, NodeID: task.NodeID, RunID: 0, Eligible: false, Reason: batchRetryReasonNotFailed}}
 	if batch.ProvenanceVersion != 1 || batch.DeletedAt != nil {
 		result.Reason = batchRetryReasonLegacy
@@ -732,11 +736,15 @@ func assessBatchRetryEligibility(db *gorm.DB, batch model.BatchCommand, task mod
 		return result, nil
 	}
 	var node model.Node
-	nodeResult := db.Select("id", "archived").Where("id = ?", dispatch.NodeID).Limit(1).Find(&node)
-	if nodeResult.Error != nil {
-		return result, nodeResult.Error
+	if lockedNode != nil {
+		node = *lockedNode
+	} else {
+		nodeResult := db.Select("id", "archived").Where("id = ?", dispatch.NodeID).Limit(1).Find(&node)
+		if nodeResult.Error != nil {
+			return result, nodeResult.Error
+		}
 	}
-	if nodeResult.RowsAffected != 1 || node.Archived {
+	if node.ID != dispatch.NodeID || node.Archived {
 		result.Reason = batchRetryReasonSourceMissing
 		return result, nil
 	}

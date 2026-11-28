@@ -7,8 +7,9 @@
 ## 配置来源与生效时间
 
 - 后端启动配置和进程环境变量变更需要重启。`duration` 使用 Go 时长格式，如 `30s`、`5m`、`24h`，不使用 `1d`。
-- 系统设置的合同为 **数据库覆盖值 > 非空环境变量 > 代码默认值**。环境变量不是仅首次启动有效：删除数据库覆盖值后会再次回退到它。Settings API 更新会清除对应缓存；直接改数据库可能等到 30 秒缓存过期。标记“重启”的设置不能热切换已启动的组件。
+- 系统设置的合同为 **数据库覆盖值 > 非空环境变量 > 代码默认值**。删除数据库覆盖值后会再次回退到环境变量。Settings API 和配置导入在事务提交后清除本 Core 进程的对应缓存。直接改数据库或由其他 Core 进程写入时，本进程可能继续使用旧缓存直至 30 秒有效期结束。标记“重启”的设置不能热切换已启动的组件。
 - `backup_assets.*` 的环境变量映射、默认值和范围列于下表；一般可经 Settings API 调整，重启项单独标记。合法的单项值仍须通过关联校验，不能用环境变量绕过领域安全约束。
+- `backup_assets.*` 更新或重置后的运行时补偿若发现本次写入的设置已变更，将保留当前数据库设置并阻断该运行时的后续备份资产操作。重启前核对数据库覆盖值和环境变量，再按[运行时补偿合同](spec/domains/backup-enablement.md#精确回滚与失败围栏)恢复。
 - `VITE_*` 在开发服务器或前端构建时读取；修改已经构建好的容器运行时环境不会重写前端静态资源。`CSP_CONNECT_SRC_EXTRA` 则由容器启动时的 Nginx 模板读取。
 - lint 父包的本地 minimatch 修补产物由源码清单和锁文件固定，Docker 前端构建阶段校验其完整性；不新增运行时环境变量或 Settings 覆盖项。修改容器环境或重启旧镜像不会替换这些构建输入，维护方式见[本地 lint 依赖修补](maintainers/automation.md#lint-依赖的本地可重复修补)。
 - 镜像内 Alpine 依赖（包括 Nginx 使用的 PCRE2）的精确版本由构建输入规格、已验证 lock 和 Dockerfile 共同固定；安装从固定 digest 的 APK 归档断网完成，不由 `.env` 或系统设置覆盖。没有切回在线软件源、忽略签名或放宽版本的运行时选项。共享加密库补丁仍需重建 Core 与可选 Worker，维护流程见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
@@ -16,7 +17,7 @@
 - Go 1.27.3 的证书验证安全补丁须重新构建并替换 Core、Worker 与 supercronic 后生效；没有关闭证书拒绝的受支持环境变量，遇到不可信证书须修复证书链。具体漏洞与 Worker 制品重建要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 - Go 1.27.4 与 Core／Worker 的 libxslt 安全输入由构建时固定，不是运行时开关；修改环境变量或重启旧镜像不会替换旧二进制或库，须重建并替换配套镜像，见[构建输入维护](maintainers/automation.md#构建输入保留与更新)。
 - Core 的 TIFF 安全补丁通过 Dockerfile 直接锁定 `tiff=4.7.2-r0`；它替换基础镜像携带的旧库，需要重建镜像和容器，不增加运行时配置项。
-- Core 与 Worker 的 Expat 固定为 `libexpat=2.10.0-r0`，修复旧库漏洞；Worker 将其纳入生产 inventory，须配套重建 Core／Worker、两架构闭包及签名制品。没有环境变量覆盖，重启旧镜像不能应用该修复；不新增配置或数据迁移，详见[运行时合同](spec/backend/deployment-runtime.md)。
+- Core 与 Worker 的 Expat 固定为 `libexpat=2.11.0-r0`，并随 libxml2 安全更新配套重建 Core／Worker、两架构闭包及签名制品。此更新无环境变量覆盖或数据迁移，详见[运行时合同](spec/backend/deployment-runtime.md)。
 - Core 的 c-ares 直接锁定为 `1.34.9-r0`，替代软件源已不可安装的 `1.34.8-r0`；须重建并替换 Core 镜像后生效，没有环境变量覆盖，不因此修改 Worker 的显式依赖或工具链 inventory。
 - Core 的 curl 锁定为 `8.23.0-r0`，由 Alpine 包依赖同步升级 libcurl，并显式锁定 `brotli-libs=1.2.1-r0` 替换基础镜像中的旧库；这些镜像内依赖更新无新增配置或环境变量覆盖，须重建并替换 Core 镜像，不改变 Worker inventory。
 - Core/Worker 的 `musl-dev=1.2.6-r3` 是 CGO 构建阶段锁定，不提供运行时环境变量覆盖；须重建配套镜像，并按新 inventory 更新闭包及签名制品，不代表运行镜像 libc 版本发生相同变化。

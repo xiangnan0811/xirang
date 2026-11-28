@@ -2000,7 +2000,7 @@ func runConfigNameMappingConcurrentMissingNameSQLite(t *testing.T) {
 	rawCallback := fmt.Sprintf("test:name-mapping-missing-name-sqlite-reservation-%d", handlerTestDBSequence.Add(1))
 	if err := second.Callback().Raw().After("gorm:raw").Register(rawCallback, func(tx *gorm.DB) {
 		querySQL := strings.ToLower(tx.Statement.SQL.String())
-		if !strings.Contains(querySQL, "update nodes set id = id where 1 = 0") {
+		if !strings.Contains(querySQL, "update system_settings set key = key where 1 = 0") {
 			return
 		}
 		reservationErrorOnce.Do(func() { reservationError <- tx.Error })

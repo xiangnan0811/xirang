@@ -22,7 +22,7 @@ import { SettingsPage } from "./settings-page";
 type Role = "admin" | "operator" | "viewer";
 type Identity = { token: string | null; role: Role | null; username: string; totpEnabled: boolean; authTransitioning: boolean };
 
-const { api, authStore, toastMock, contexts } = vi.hoisted(() => {
+const { api, escalationApi, authStore, toastMock, contexts } = vi.hoisted(() => {
   let snapshot: Identity = { token: "token-a", role: "admin", username: "admin", totpEnabled: true, authTransitioning: false };
   const listeners = new Set<() => void>();
   const fetchAlertDeliveryStats = vi.fn();
@@ -43,9 +43,11 @@ const { api, authStore, toastMock, contexts } = vi.hoisted(() => {
       triggerTask: vi.fn(),
       requestTaskManualTriggerCredentialGrant: vi.fn(),
       getAlerts: vi.fn(),
+      listAnomalyEvents: vi.fn(),
+    },
+    escalationApi: {
       listEscalationPolicies: vi.fn(),
       listAlertEscalationEvents: vi.fn(),
-      listAnomalyEvents: vi.fn(),
     },
     // Mirrors AuthProvider: Context consumers re-render when the identity changes.
     authStore: {
@@ -88,6 +90,7 @@ vi.mock("@/lib/api/client", async () => {
   const core = await import("@/lib/api/core");
   return { apiClient: api, ApiError: core.ApiError };
 });
+vi.mock("@/lib/api/escalation", () => ({ createEscalationApi: () => escalationApi }));
 
 // Settings panels are stubbed: these tests prove routing and history, not panel behavior. The
 // config panels expose a local save that only re-renders, standing in for a completed save.
@@ -239,8 +242,8 @@ describe("notification config context routing", () => {
     api.getAlertGroupInfo.mockResolvedValue({ count: 1, siblingNodeIds: [] });
     api.getAlertUnreadCount.mockResolvedValue({ total: 0, critical: 0, warning: 0 });
     api.getTaskFailureSummary.mockResolvedValue({ failedTasks: 0, windowHours: 24 });
-    api.listEscalationPolicies.mockResolvedValue([]);
-    api.listAlertEscalationEvents.mockResolvedValue([]);
+    escalationApi.listEscalationPolicies.mockResolvedValue([]);
+    escalationApi.listAlertEscalationEvents.mockResolvedValue([]);
     api.listAnomalyEvents.mockResolvedValue({ data: [], total: 0 });
     contexts.alerts.fetchAlertDeliveryStats.mockReset();
     contexts.alerts.fetchAlertDeliveryStats.mockResolvedValue({ windowHours: 24, totalSent: 0, totalFailed: 0, successRate: 100, byIntegration: [] });

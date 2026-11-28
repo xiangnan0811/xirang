@@ -27,15 +27,19 @@ export function ExpiryCountdownBadge({ expiryDate, archived }: ExpiryCountdownBa
     return null;
   }
 
-  const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+  const msRemaining = expiry - now;
 
-  if (daysRemaining < 0) {
+  // Compare instants before rounding: Math.ceil of a negative fraction is -0,
+  // which would render "0 days left" for an expiry that already passed.
+  if (msRemaining <= 0) {
     return (
       <span className="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-micro font-medium text-destructive">
         {t('expiry.expired')}
       </span>
     );
   }
+
+  const daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
 
   if (daysRemaining <= 3) {
     return (

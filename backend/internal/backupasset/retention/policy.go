@@ -355,16 +355,56 @@ func (service *PolicyService) Select(ctx context.Context, request SelectionReque
 	return selection, err
 }
 
+// SelectWithTx acquires the repository gate before any business row lock; callers
+// must invoke it before taking such locks in tx. Internal callers that already
+// hold the repository gate use selectInLockedRepositoryTx instead.
 func (service *PolicyService) SelectWithTx(ctx context.Context, tx *gorm.DB, request SelectionRequest) (Selection, error) {
+	if err := validateSelectionRequest(tx, request); err != nil {
+		return Selection{}, err
+	}
+	var hint model.BackupRetentionPolicy
+	if err := tx.WithContext(ctx).Select("id", "scope_kind", "scope_id").First(&hint, "id = ?", request.PolicyID).Error; err != nil {
+		return Selection{}, mapPolicyLookupError(err)
+	}
+	repositoryID := hint.ScopeID
+	if backupasset.RetentionPolicyScopeKind(hint.ScopeKind) == backupasset.RetentionPolicyScopeRepository {
+		if backupasset.ValidateOpaqueID(repositoryID) != nil {
+			return Selection{}, fmt.Errorf("%w: retention policy repository scope changed", backupasset.ErrConflict)
+		}
+	} else {
+		var err error
+		repositoryID, _, err = resolveSelectionScope(tx.WithContext(ctx), hint, false)
+		if err != nil {
+			return Selection{}, err
+		}
+	}
+	if err := lockRetentionRepositoryTx(ctx, tx, repositoryID); err != nil {
+		return Selection{}, err
+	}
+	return service.selectValidatedInLockedRepositoryTx(ctx, tx, request, repositoryID)
+}
+
+func validateSelectionRequest(tx *gorm.DB, request SelectionRequest) error {
 	if tx == nil || backupasset.ValidateOpaqueID(request.PolicyID) != nil || request.ExpectedRevision < 1 {
-		return Selection{}, fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
+		return fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
 	}
 	if strings.TrimSpace(request.Cursor) == "" && (request.EvaluatedAt.IsZero() || request.EvaluatedAt.Location() != time.UTC) {
-		return Selection{}, fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
+		return fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
 	}
 	if !request.EvaluatedAt.IsZero() && request.EvaluatedAt.Location() != time.UTC {
-		return Selection{}, fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
+		return fmt.Errorf("%w: invalid retention policy selection", backupasset.ErrInvalidState)
 	}
+	return nil
+}
+
+func (service *PolicyService) selectInLockedRepositoryTx(ctx context.Context, tx *gorm.DB, request SelectionRequest, repositoryID string) (Selection, error) {
+	if err := validateSelectionRequest(tx, request); err != nil {
+		return Selection{}, err
+	}
+	return service.selectValidatedInLockedRepositoryTx(ctx, tx, request, repositoryID)
+}
+
+func (service *PolicyService) selectValidatedInLockedRepositoryTx(ctx context.Context, tx *gorm.DB, request SelectionRequest, repositoryID string) (Selection, error) {
 	var policy model.BackupRetentionPolicy
 	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&policy, "id = ?", request.PolicyID).Error; err != nil {
 		return Selection{}, mapPolicyLookupError(err)
@@ -380,9 +420,12 @@ func (service *PolicyService) SelectWithTx(ctx context.Context, tx *gorm.DB, req
 	if err != nil {
 		return Selection{}, err
 	}
-	repositoryID, taskID, err := resolveSelectionScope(tx.WithContext(ctx), policy)
+	currentRepositoryID, taskID, err := resolveSelectionScope(tx.WithContext(ctx), policy, true)
 	if err != nil {
 		return Selection{}, err
+	}
+	if currentRepositoryID != repositoryID {
+		return Selection{}, fmt.Errorf("%w: retention policy repository scope changed", backupasset.ErrConflict)
 	}
 	query := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
 		Where("repository_id = ?", repositoryID).
@@ -548,7 +591,7 @@ func lockPolicyScope(tx *gorm.DB, scopeKind backupasset.RetentionPolicyScopeKind
 	}
 }
 
-func resolveSelectionScope(tx *gorm.DB, policy model.BackupRetentionPolicy) (string, *uint, error) {
+func resolveSelectionScope(tx *gorm.DB, policy model.BackupRetentionPolicy, lockLink bool) (string, *uint, error) {
 	switch backupasset.RetentionPolicyScopeKind(policy.ScopeKind) {
 	case backupasset.RetentionPolicyScopeRepository:
 		var repository model.BackupRepository
@@ -561,10 +604,11 @@ func resolveSelectionScope(tx *gorm.DB, policy model.BackupRetentionPolicy) (str
 		return repository.ID, nil, nil
 	case backupasset.RetentionPolicyScopeTaskLink:
 		var link model.TaskRepositoryLink
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("repository_id", "task_id").
-			Where("id = ? AND unlinked_at IS NULL", policy.ScopeID).
-			First(&link).Error; err != nil {
+		query := tx.Select("repository_id", "task_id").Where("id = ? AND unlinked_at IS NULL", policy.ScopeID)
+		if lockLink {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := query.First(&link).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return "", nil, fmt.Errorf("%w: retention policy Task-link scope changed", backupasset.ErrConflict)
 			}

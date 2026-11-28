@@ -247,7 +247,7 @@ describe("useConsoleData", () => {
     const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await act(async () => {
-      const savedId = await result.current.createNode({
+      const saved = await result.current.createNode({
         name: createdNode.name,
         host: createdNode.host,
         username: createdNode.username,
@@ -258,7 +258,8 @@ describe("useConsoleData", () => {
         basePath: createdNode.basePath,
       });
 
-      expect(savedId).toBe(createdNode.id);
+      // The fixture predates config revisions, so the committed result carries only the node id.
+      expect(saved).toEqual({ id: createdNode.id });
     });
 
     expect(result.current.nodes.map((node) => node.id)).toContain(createdNode.id);

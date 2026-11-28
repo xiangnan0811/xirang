@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sort"
 	"time"
@@ -220,9 +221,13 @@ func (r *TaskRepository) RunInTransaction(ctx context.Context, fn func(ctx conte
 	if r == nil || r.db == nil {
 		return apperr.WrapDBError(gorm.ErrInvalidDB)
 	}
+	var options *sql.TxOptions
+	if r.db.Name() == "postgres" {
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(ctx, NewTaskRepository(tx))
-	})
+	}, options)
 }
 
 // LockTaskIDsForUpdate locks task rows in ascending ID order. SQLite treats

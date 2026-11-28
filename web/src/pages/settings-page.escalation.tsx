@@ -12,13 +12,14 @@ import {
   restoreConnectedDialogOpener,
 } from "@/components/ui/dialog-opener";
 import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
-import { apiClient } from "@/lib/api/client";
-import type { EscalationPolicyInput } from "@/lib/api/escalation";
+import { createEscalationApi, type EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
 import type { EscalationPolicy } from "@/types/domain";
+
+const escalationApi = createEscalationApi();
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -61,7 +62,7 @@ function SettingsPageEscalationContent() {
     if (!token) return;
     const controller = new AbortController();
     const owns = capture();
-    apiClient.listEscalationPolicies(token, { signal: controller.signal })
+    escalationApi.listEscalationPolicies(token, { signal: controller.signal })
       .then((data) => {
         if (!controller.signal.aborted && owns()) setPolicies(data);
       })
@@ -124,7 +125,7 @@ function SettingsPageEscalationContent() {
         enabled: checked,
         levels: policy.levels,
       };
-      const updated = await apiClient.updateEscalationPolicy(token, policy.id, input);
+      const updated = await escalationApi.updateEscalationPolicy(token, policy.id, input);
       if (!owns()) return;
       setPolicies((prev) =>
         prev.map((p) => (p.id === updated.id ? updated : p))
@@ -151,7 +152,7 @@ function SettingsPageEscalationContent() {
     if (!confirmed || !owns()) return;
     setDeletingId(policy.id);
     try {
-      await apiClient.deleteEscalationPolicy(token, policy.id);
+      await escalationApi.deleteEscalationPolicy(token, policy.id);
       if (!owns()) return;
       setPolicies((prev) => prev.filter((p) => p.id !== policy.id));
     } catch (err) {

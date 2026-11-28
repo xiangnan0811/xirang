@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/internal/authoritylock"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
@@ -429,9 +430,26 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 	if len(markerKey) == 0 {
 		return provider.RsyncTreeAttemptV1{}, backupasset.Lease{}, nil, fmt.Errorf("%w: managed Rsync marker key is unavailable", backupasset.ErrInvalidState)
 	}
+	deadline := preparedAt.Add(leaseConfig.AbsoluteDeadline).UTC()
+	checkDeadline := func() error {
+		now := service.now().UTC()
+		if preparedAt.IsZero() || now.IsZero() || now.Before(preparedAt) || !deadline.After(preparedAt) || !deadline.After(now) {
+			return fmt.Errorf("%w: managed Rsync point deadline elapsed", backupasset.ErrInvalidState)
+		}
+		return nil
+	}
 	// Publication and lifecycle deletion share repository -> Task -> TaskRun
 	// -> link -> binding -> Node -> SSH key lock ordering.
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := authoritylock.LockRepository(ctx, tx, runtime.repository.ID); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return capabilityError(backupasset.CapabilityProviderUnavailable, "")
+		}
+		if err := checkDeadline(); err != nil {
+			return err
+		}
 		var repository model.BackupRepository
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
 			return fmt.Errorf("lock managed Rsync publication repository: %w", err)
@@ -521,7 +539,6 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 		if trigger == "" {
 			trigger = taskRun.TriggerType
 		}
-		deadline := preparedAt.Add(leaseConfig.AbsoluteDeadline).UTC()
 		lineage, err := managedRsyncPublicationLineageForRun(link, taskEntity, taskRun, trigger, run.ChainRunID, startedAt, preparedAt, deadline, attemptMode)
 		if err != nil {
 			return err
@@ -552,6 +569,9 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 				return fmt.Errorf("%w: deterministic managed Rsync point immutable fields differ", backupasset.ErrConflict)
 			}
 			return fmt.Errorf("%w: deterministic managed Rsync point already exists", backupasset.ErrPublicationInProgress)
+		}
+		if err := checkDeadline(); err != nil {
+			return err
 		}
 		if err := tx.Create(&point).Error; err != nil {
 			if isPublicationProducingRunConflict(err) {
@@ -606,7 +626,7 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 		if err := tx.Save(&point).Error; err != nil {
 			return fmt.Errorf("persist managed Rsync prepared attempt: %w", err)
 		}
-		return nil
+		return checkDeadline()
 	})
 	if err != nil {
 		return provider.RsyncTreeAttemptV1{}, backupasset.Lease{}, nil, err

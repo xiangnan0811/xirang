@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"sort"
@@ -26,34 +27,25 @@ type configImportRollbackJournal struct {
 }
 
 type configImportRollbackSnapshot struct {
-	sshKeys            configImportTableSnapshot
-	nodes              configImportTableSnapshot
-	policies           configImportTableSnapshot
-	tasks              configImportTableSnapshot
-	settings           configImportTableSnapshot
-	graph              configImportGraphRollback
-	settingKeys        []string
-	priorTemplateLinks map[uint]map[uint]bool
+	sshKeys                  configImportTableSnapshot
+	nodes                    configImportTableSnapshot
+	policies                 configImportTableSnapshot
+	tasks                    configImportTableSnapshot
+	settings                 configImportTableSnapshot
+	graph                    configImportGraphRollback
+	priorTemplateLinks       map[uint]map[uint]bool
+	priorMissingDrillTargets map[uint]bool
+	sealedResticLinks        map[string]configImportResticLinkIdentity
 }
 
 type configImportTableSnapshot struct {
-	table                 string
-	primaryKey            string
-	where                 string
-	args                  []any
-	prior                 map[string]map[string]any
-	current               map[string]map[string]any
-	created               []any
-	trackCreatedOwnership bool
-	ownedCreated          map[string]struct{}
-}
-
-type configImportGraphRollback struct {
-	refs                configImportTableSnapshot
-	bindings            configImportTableSnapshot
-	createdRepositories []any
-	createdLinks        []any
-	createdPolicies     []any
+	table      string
+	primaryKey string
+	where      string
+	args       []any
+	prior      map[string]map[string]any
+	current    map[string]map[string]any
+	created    []any
 }
 
 func newConfigImportRollbackJournal(db *gorm.DB, settingsSvc *settings.Service) *configImportRollbackJournal {
@@ -65,7 +57,6 @@ func captureConfigImportRollbackSnapshot(
 	tx *gorm.DB,
 	data configImportData,
 	settingsPlan []configImportSetting,
-	envelope configImportEnvelope,
 ) (*configImportRollbackSnapshot, error) {
 	if tx == nil {
 		return nil, fmt.Errorf("config import rollback snapshot transaction is unavailable")
@@ -76,17 +67,11 @@ func captureConfigImportRollbackSnapshot(
 		policies: newConfigImportTableSnapshot("policies", "id", "name IN ?", importRecordNames(data.Policies)),
 		tasks:    newConfigImportTableSnapshot("tasks", "id", "name IN ?", importRecordNames(data.Tasks)),
 	}
-	// Nodes and SSH keys must only be compensated when this transaction
-	// actually wrote their IDs. A name-based before/after diff cannot establish
-	// ownership when a rejected or skipped record races with a concurrent insert.
-	snapshot.sshKeys.trackCreatedOwnership = true
-	snapshot.nodes.trackCreatedOwnership = true
-
+	settingKeys := make([]string, 0, len(settingsPlan))
 	for _, setting := range settingsPlan {
-		snapshot.settingKeys = append(snapshot.settingKeys, setting.key)
+		settingKeys = append(settingKeys, setting.key)
 	}
-	snapshot.settingKeys = uniqueSortedConfigImportStrings(snapshot.settingKeys)
-	snapshot.settings = newConfigImportTableSnapshot("system_settings", "key", "key IN ?", snapshot.settingKeys)
+	snapshot.settings = newConfigImportTableSnapshot("system_settings", "key", "key IN ?", settingKeys)
 	for _, table := range []*configImportTableSnapshot{
 		&snapshot.sshKeys, &snapshot.nodes, &snapshot.policies, &snapshot.tasks, &snapshot.settings,
 	} {
@@ -144,57 +129,45 @@ func captureConfigImportRollbackSnapshot(
 			}
 		}
 	}
-	if envelope.Version == configExportVersion2 {
-		refs := configImportGraphRefs(envelope.Graph)
-		snapshot.graph.refs = newConfigImportTableSnapshot(
-			"backup_asset_config_import_refs", "id",
-			"source_document_id = ? AND source_reference IN ?", envelope.DocumentID, refs,
-		)
-		if err := snapshot.graph.refs.capture(ctx, tx); err != nil {
-			return nil, err
-		}
-		repositoryIDs := snapshot.graph.refs.localEntityIDs(configAssetEntityRepository)
-		snapshot.graph.bindings = newConfigImportTableSnapshot(
-			"repository_access_bindings", "id", "repository_id IN ?", repositoryIDs,
-		)
-		if err := snapshot.graph.bindings.capture(ctx, tx); err != nil {
-			return nil, err
-		}
+	if err := snapshot.capturePriorMissingDrillTargets(ctx, tx); err != nil {
+		return nil, err
 	}
 	return snapshot, nil
 }
 
-func (snapshot *configImportRollbackSnapshot) seal(ctx context.Context, tx *gorm.DB) error {
+func (snapshot *configImportRollbackSnapshot) seal(ctx context.Context, tx *gorm.DB, accumulator *configImportAccumulator) error {
 	if snapshot == nil || tx == nil {
 		return fmt.Errorf("config import rollback snapshot is unavailable")
 	}
-	for _, table := range []*configImportTableSnapshot{
-		&snapshot.sshKeys, &snapshot.nodes, &snapshot.policies, &snapshot.tasks, &snapshot.settings,
+	for _, entry := range []struct {
+		table  *configImportTableSnapshot
+		entity string
+	}{
+		{&snapshot.sshKeys, configImportEntitySSHKeys},
+		{&snapshot.nodes, configImportEntityNodes},
+		{&snapshot.policies, configImportEntityPolicies},
+		{&snapshot.tasks, configImportEntityTasks},
+		{&snapshot.settings, configImportEntitySystemSettings},
 	} {
-		if err := table.seal(ctx, tx); err != nil {
+		if err := entry.table.sealIDs(ctx, tx, accumulator.rollbackIDs(entry.entity)); err != nil {
 			return err
 		}
 	}
-	if snapshot.graph.refs.table == "" {
-		return nil
-	}
-	if err := snapshot.graph.refs.seal(ctx, tx); err != nil {
+	if err := snapshot.captureSealedResticLinks(ctx, tx); err != nil {
 		return err
 	}
-	for _, row := range snapshot.graph.refs.createdRows() {
-		switch rawConfigImportString(row["entity_kind"]) {
-		case configAssetEntityRepository:
-			snapshot.graph.createdRepositories = append(snapshot.graph.createdRepositories, row["local_entity_id"])
-		case configAssetEntityTaskLink:
-			snapshot.graph.createdLinks = append(snapshot.graph.createdLinks, row["local_entity_id"])
-		case configAssetEntityRetentionPolicy:
-			snapshot.graph.createdPolicies = append(snapshot.graph.createdPolicies, row["local_entity_id"])
-		}
+	return snapshot.graph.seal(ctx, tx)
+}
+
+func (snapshot *configImportRollbackSnapshot) invalidateSettingsCache(settingsSvc *settings.Service) {
+	if snapshot == nil || settingsSvc == nil || len(snapshot.settings.current) == 0 {
+		return
 	}
-	repositoryIDs := snapshot.graph.refs.localEntityIDs(configAssetEntityRepository)
-	snapshot.graph.bindings.where = "repository_id IN ?"
-	snapshot.graph.bindings.args = []any{repositoryIDs}
-	return snapshot.graph.bindings.seal(ctx, tx)
+	settingKeys := make([]string, 0, len(snapshot.settings.current))
+	for key := range snapshot.settings.current {
+		settingKeys = append(settingKeys, key)
+	}
+	settingsSvc.InvalidateCachedValues(settingKeys)
 }
 
 func (journal *configImportRollbackJournal) install(snapshot *configImportRollbackSnapshot) {
@@ -202,6 +175,21 @@ func (journal *configImportRollbackJournal) install(snapshot *configImportRollba
 	journal.snapshot = snapshot
 	journal.restored = false
 	journal.mu.Unlock()
+}
+
+func configImportTransaction(ctx context.Context, db *gorm.DB, fn func(*gorm.DB) error) error {
+	if db.Name() == "postgres" {
+		return db.WithContext(ctx).Transaction(fn, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	}
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if tx.Name() == "sqlite" {
+			// Reserve the writer before taking any snapshots, including on deferred DSNs.
+			if err := tx.Exec("UPDATE system_settings SET key = key WHERE 1 = 0").Error; err != nil {
+				return fmt.Errorf("reserve config import writer: %w", err)
+			}
+		}
+		return fn(tx)
+	})
 }
 
 func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
@@ -214,36 +202,64 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 		return nil
 	}
 	snapshot := journal.snapshot
-	if err := journal.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if snapshot.hasTaskOwnershipRows() || len(snapshot.policies.prior) > 0 || len(snapshot.policies.current) > 0 {
+	if err := configImportTransaction(ctx, journal.db, func(tx *gorm.DB) error {
+		taskRows := len(snapshot.tasks.current) > 0
+		if taskRows || len(snapshot.policies.current) > 0 || len(snapshot.nodes.created) > 0 {
 			if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
 				return fmt.Errorf("config import rollback target ownership lock: %w", err)
 			}
-			if err := snapshot.lockTaskRollbackPolicies(ctx, tx); err != nil {
-				return err
-			}
-			if snapshot.hasTaskOwnershipRows() {
-				if err := snapshot.validateTaskRollbackOwnership(ctx, tx); err != nil {
-					return err
-				}
-			}
-			if err := snapshot.validateTemplateRollbackLinks(ctx, tx); err != nil {
-				return err
-			}
+		}
+		if err := snapshot.lockTaskRollbackPolicies(ctx, tx); err != nil {
+			return err
 		}
 		tables := []*configImportTableSnapshot{
-			&snapshot.settings, &snapshot.tasks, &snapshot.policies, &snapshot.nodes, &snapshot.sshKeys,
+			&snapshot.tasks, &snapshot.policies, &snapshot.nodes, &snapshot.sshKeys, &snapshot.settings,
+		}
+		// Acquire write-compatible table locks before the row locks used below.
+		// Rotation and concurrent settings imports otherwise can lock the table
+		// between verification and the first write back to it.
+		if tx.Name() == "postgres" {
+			for _, table := range []*configImportTableSnapshot{&snapshot.nodes, &snapshot.settings} {
+				if len(table.current) > 0 {
+					if err := tx.Exec("LOCK TABLE " + table.table + " IN ROW EXCLUSIVE MODE NOWAIT").Error; err != nil {
+						return fmt.Errorf("config import rollback table lock: %w", err)
+					}
+				}
+			}
 		}
 		for _, table := range tables {
 			if err := table.verifyCurrent(ctx, tx); err != nil {
 				return err
 			}
 		}
+		if err := snapshot.graph.verifyCurrent(ctx, tx); err != nil {
+			return err
+		}
+		if taskRows {
+			if err := snapshot.validateTaskRollbackOwnership(ctx, tx); err != nil {
+				return err
+			}
+		}
+		if err := snapshot.validateTemplateRollbackLinks(ctx, tx); err != nil {
+			return err
+		}
+		if err := snapshot.validateClassicRollbackReferences(ctx, tx); err != nil {
+			return err
+		}
+		if err := snapshot.graph.validateReferences(ctx, tx); err != nil {
+			return err
+		}
 		if err := snapshot.graph.restore(ctx, tx); err != nil {
 			return err
 		}
+		// Restore surviving rows before removing the import's new parents.
+		for index := len(tables) - 1; index >= 0; index-- {
+			if err := tables[index].restorePrior(ctx, tx); err != nil {
+				return err
+			}
+		}
 		for _, table := range tables {
-			if err := table.restore(ctx, tx); err != nil {
+			if err := table.deleteCreated(ctx, tx); err != nil {
 				return err
 			}
 		}
@@ -252,17 +268,8 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 		return err
 	}
 	journal.restored = true
-	if journal.settingsSvc != nil {
-		journal.settingsSvc.InvalidateCachedValues(snapshot.settingKeys)
-	}
+	snapshot.invalidateSettingsCache(journal.settingsSvc)
 	return nil
-}
-
-func (snapshot *configImportRollbackSnapshot) hasTaskOwnershipRows() bool {
-	if snapshot == nil {
-		return false
-	}
-	return len(snapshot.tasks.prior) > 0 || len(snapshot.tasks.current) > 0 || len(snapshot.tasks.created) > 0
 }
 
 func (snapshot *configImportRollbackSnapshot) validateTemplateRollbackLinks(ctx context.Context, tx *gorm.DB) error {
@@ -381,7 +388,7 @@ func (snapshot *configImportRollbackSnapshot) lockTaskRollbackPolicies(ctx conte
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	var policies []model.Policy
 	if err := tx.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}).
 		Where("id IN ?", ids).
 		Order("id").
 		Find(&policies).Error; err != nil {
@@ -395,41 +402,16 @@ func (snapshot *configImportRollbackSnapshot) lockTaskRollbackPolicies(ctx conte
 
 func newConfigImportTableSnapshot(table, primaryKey, where string, args ...any) configImportTableSnapshot {
 	return configImportTableSnapshot{
-		table:        table,
-		primaryKey:   primaryKey,
-		where:        where,
-		args:         args,
-		prior:        make(map[string]map[string]any),
-		current:      make(map[string]map[string]any),
-		ownedCreated: make(map[string]struct{}),
+		table:      table,
+		primaryKey: primaryKey,
+		where:      where,
+		args:       args,
+		prior:      make(map[string]map[string]any),
 	}
-}
-
-func (snapshot *configImportTableSnapshot) registerOwnedCreated(ids map[uint]struct{}) {
-	if snapshot == nil {
-		return
-	}
-	snapshot.trackCreatedOwnership = true
-	if snapshot.ownedCreated == nil {
-		snapshot.ownedCreated = make(map[string]struct{}, len(ids))
-	}
-	for id := range ids {
-		if id != 0 {
-			snapshot.ownedCreated[fmt.Sprint(id)] = struct{}{}
-		}
-	}
-}
-
-func (snapshot *configImportTableSnapshot) ownsCreated(key string) bool {
-	if snapshot == nil || !snapshot.trackCreatedOwnership {
-		return true
-	}
-	_, owned := snapshot.ownedCreated[key]
-	return owned
 }
 
 func (snapshot *configImportTableSnapshot) capture(ctx context.Context, tx *gorm.DB) error {
-	rows, err := snapshot.load(ctx, tx)
+	rows, err := snapshot.load(ctx, tx, false)
 	if err != nil {
 		return err
 	}
@@ -443,58 +425,48 @@ func (snapshot *configImportTableSnapshot) capture(ctx context.Context, tx *gorm
 	return nil
 }
 
-func (snapshot *configImportTableSnapshot) seal(ctx context.Context, tx *gorm.DB) error {
-	rows, err := snapshot.load(ctx, tx)
+func (snapshot *configImportTableSnapshot) sealIDs(ctx context.Context, tx *gorm.DB, ids []any) error {
+	snapshot.where = snapshot.primaryKey + " IN ?"
+	snapshot.args = []any{ids}
+	rows, err := snapshot.load(ctx, tx, false)
 	if err != nil {
 		return err
 	}
-	snapshot.created = snapshot.created[:0]
+	if len(rows) != len(ids) {
+		return fmt.Errorf("config import rollback cannot seal writes in %s", snapshot.table)
+	}
 	snapshot.current = make(map[string]map[string]any, len(rows))
 	for _, row := range rows {
 		key := rawConfigImportKey(row[snapshot.primaryKey])
 		if key == "" {
 			return fmt.Errorf("config import rollback row identity is unavailable")
 		}
-		if _, exists := snapshot.prior[key]; !exists && !snapshot.ownsCreated(key) {
-			// A row that appeared after capture is not importer-owned merely
-			// because it shares an input name. Ignore it for both CAS and
-			// compensation; concurrent user rows must survive restore.
-			continue
-		}
 		snapshot.current[key] = row
 		if _, exists := snapshot.prior[key]; !exists {
 			snapshot.created = append(snapshot.created, row[snapshot.primaryKey])
+		}
+	}
+	for key := range snapshot.prior {
+		if _, exists := snapshot.current[key]; !exists {
+			delete(snapshot.prior, key)
 		}
 	}
 	return nil
 }
 
 func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx *gorm.DB) error {
-	if snapshot == nil || snapshot.table == "" {
+	if snapshot == nil || len(snapshot.current) == 0 {
 		return nil
 	}
-	rows, err := snapshot.load(ctx, tx)
+	rows, err := snapshot.load(ctx, tx, true)
 	if err != nil {
 		return err
 	}
-	actual := make(map[string]map[string]any, len(rows))
-	for _, row := range rows {
-		key := rawConfigImportKey(row[snapshot.primaryKey])
-		if key == "" {
-			return fmt.Errorf("config import rollback row identity is unavailable")
-		}
-		if snapshot.trackCreatedOwnership {
-			if _, expected := snapshot.current[key]; !expected && !snapshot.ownsCreated(key) {
-				continue
-			}
-		}
-		actual[key] = row
-	}
-	if len(actual) != len(snapshot.current) {
+	if len(rows) != len(snapshot.current) {
 		return fmt.Errorf("config import rollback detected concurrent changes in %s", snapshot.table)
 	}
-	for key, expected := range snapshot.current {
-		row, ok := actual[key]
+	for _, row := range rows {
+		expected, ok := snapshot.current[rawConfigImportKey(row[snapshot.primaryKey])]
 		if !ok || !configImportRowsEqual(expected, row) {
 			return fmt.Errorf("config import rollback detected concurrent changes in %s", snapshot.table)
 		}
@@ -502,13 +474,22 @@ func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx
 	return nil
 }
 
-func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB) ([]map[string]any, error) {
+func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB, lock bool) ([]map[string]any, error) {
 	if snapshot.table == "" || len(snapshot.args) == 0 || configImportEmptyTarget(snapshot.args) {
 		return nil, nil
 	}
 	rows := make([]map[string]any, 0)
-	if err := tx.WithContext(ctx).Table(snapshot.table).Where(snapshot.where, snapshot.args...).Find(&rows).Error; err != nil {
+	query := tx.WithContext(ctx).Table(snapshot.table).Where(snapshot.where, snapshot.args...).Order(snapshot.primaryKey)
+	if lock && tx.Name() == "postgres" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"})
+	}
+	if err := query.Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	if snapshot.table == "nodes" || snapshot.table == "ssh_keys" {
+		for _, row := range rows {
+			delete(row, "probe_generation")
+		}
 	}
 	return rows, nil
 }
@@ -598,7 +579,26 @@ func configImportSQLiteTimestampValues(timestamp time.Time) []any {
 }
 
 func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm.DB) error {
-	if snapshot == nil || snapshot.table == "" {
+	if err := snapshot.restorePrior(ctx, tx); err != nil {
+		return err
+	}
+	return snapshot.deleteCreated(ctx, tx)
+}
+
+func (snapshot *configImportTableSnapshot) deleteCreated(ctx context.Context, tx *gorm.DB) error {
+	if snapshot == nil || len(snapshot.created) == 0 {
+		return nil
+	}
+	if snapshot.table == "tasks" {
+		// The owned tasks were verified under lock. Delete them together so
+		// ON DELETE SET NULL cannot change an owned row before it is deleted.
+		result := tx.WithContext(ctx).Exec("DELETE FROM tasks WHERE id IN ?", snapshot.created)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(snapshot.created)) {
+			return fmt.Errorf("config import rollback task rows changed during restore")
+		}
 		return nil
 	}
 	for _, value := range snapshot.created {
@@ -622,6 +622,13 @@ func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm
 			return fmt.Errorf("config import rollback created row %s in %s changed during restore", key, snapshot.table)
 		}
 	}
+	return nil
+}
+
+func (snapshot *configImportTableSnapshot) restorePrior(ctx context.Context, tx *gorm.DB) error {
+	if snapshot == nil || len(snapshot.prior) == 0 {
+		return nil
+	}
 	keys := make([]string, 0, len(snapshot.prior))
 	for key := range snapshot.prior {
 		keys = append(keys, key)
@@ -629,23 +636,31 @@ func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm
 	sort.Strings(keys)
 	for _, key := range keys {
 		row := snapshot.prior[key]
-		if expectedCurrent, ok := snapshot.current[key]; ok {
-			predicate, args, err := configImportCASPredicate(tx, snapshot.primaryKey, expectedCurrent)
-			if err != nil {
-				return err
-			}
-			result := tx.WithContext(ctx).Table(snapshot.table).
-				Where(predicate, args...).Updates(row)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				return fmt.Errorf("config import rollback prior row %s in %s changed during restore", key, snapshot.table)
-			}
-			continue
+		expectedCurrent, ok := snapshot.current[key]
+		if !ok {
+			return fmt.Errorf("config import rollback prior row %s in %s is unavailable", key, snapshot.table)
 		}
-		if err := tx.WithContext(ctx).Table(snapshot.table).Create(row).Error; err != nil {
+		if snapshot.table == "nodes" {
+			// Revisions are database-owned. Keep the sealed value in the CAS
+			// predicate, but let the trigger assign a fresh revision on restore.
+			restored := make(map[string]any, len(row))
+			for column, value := range row {
+				if column != "config_revision" {
+					restored[column] = value
+				}
+			}
+			row = restored
+		}
+		predicate, args, err := configImportCASPredicate(tx, snapshot.primaryKey, expectedCurrent)
+		if err != nil {
 			return err
+		}
+		result := tx.WithContext(ctx).Table(snapshot.table).Where(predicate, args...).Updates(row)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("config import rollback prior row %s in %s changed during restore", key, snapshot.table)
 		}
 	}
 	return nil
@@ -654,7 +669,7 @@ func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm
 func (snapshot *configImportRollbackSnapshot) validateTaskRollbackOwnership(ctx context.Context, tx *gorm.DB) error {
 	var tasks []model.Task
 	if err := tx.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}).
 		Select("id", "node_id", "policy_id", "executor_type", "rsync_target").
 		Order("id").
 		Find(&tasks).Error; err != nil {
@@ -792,51 +807,6 @@ func configImportRollbackUint(value any) (uint, bool) {
 	return uint(parsed), true
 }
 
-func (snapshot *configImportTableSnapshot) createdRows() []map[string]any {
-	rows := make([]map[string]any, 0, len(snapshot.created))
-	for _, value := range snapshot.created {
-		if row, exists := snapshot.current[rawConfigImportKey(value)]; exists {
-			rows = append(rows, row)
-		}
-	}
-	return rows
-}
-
-func (snapshot *configImportTableSnapshot) localEntityIDs(kind string) []string {
-	ids := make([]string, 0)
-	rows := snapshot.current
-	if len(rows) == 0 {
-		rows = snapshot.prior
-	}
-	for _, row := range rows {
-		if rawConfigImportString(row["entity_kind"]) == kind {
-			ids = append(ids, rawConfigImportString(row["local_entity_id"]))
-		}
-	}
-	return uniqueSortedConfigImportStrings(ids)
-}
-
-func (graph *configImportGraphRollback) restore(ctx context.Context, tx *gorm.DB) error {
-	for _, deletion := range []struct {
-		table string
-		ids   []any
-	}{
-		{"backup_retention_policies", graph.createdPolicies},
-		{"task_repository_links", graph.createdLinks},
-		{"backup_repositories", graph.createdRepositories},
-	} {
-		if len(deletion.ids) > 0 {
-			if err := tx.WithContext(ctx).Exec("DELETE FROM "+deletion.table+" WHERE id IN ?", deletion.ids).Error; err != nil {
-				return err
-			}
-		}
-	}
-	if err := graph.bindings.restore(ctx, tx); err != nil {
-		return err
-	}
-	return graph.refs.restore(ctx, tx)
-}
-
 func importRecordNames(records []map[string]any) []string {
 	names := make([]string, 0, len(records))
 	for _, record := range records {
@@ -845,20 +815,6 @@ func importRecordNames(records []map[string]any) []string {
 		}
 	}
 	return uniqueSortedConfigImportStrings(names)
-}
-
-func configImportGraphRefs(graph configAssetGraph) []string {
-	refs := make([]string, 0, len(graph.BackupRepositories)+len(graph.TaskRepositoryLinks)+len(graph.BackupRetentionPolicies))
-	for _, repository := range graph.BackupRepositories {
-		refs = append(refs, repository.RepositoryRef)
-	}
-	for _, link := range graph.TaskRepositoryLinks {
-		refs = append(refs, link.LinkRef)
-	}
-	for _, policy := range graph.BackupRetentionPolicies {
-		refs = append(refs, policy.PolicyRef)
-	}
-	return uniqueSortedConfigImportStrings(refs)
 }
 
 func uniqueSortedConfigImportStrings(values []string) []string {
@@ -883,6 +839,10 @@ func configImportEmptyTarget(args []any) bool {
 			if len(value) == 0 {
 				return true
 			}
+		case []any:
+			if len(value) == 0 {
+				return true
+			}
 		}
 	}
 	return false
@@ -890,6 +850,8 @@ func configImportEmptyTarget(args []any) bool {
 
 func rawConfigImportKey(value any) string {
 	switch typed := value.(type) {
+	case nil:
+		return ""
 	case []byte:
 		return string(typed)
 	default:

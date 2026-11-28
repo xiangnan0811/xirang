@@ -25,13 +25,54 @@ const (
 // a pinned connection with its local busy timeout disabled so cancellation can
 // bound lock contention; the original timeout is restored before release.
 func WithSQLiteBusyRetryTx(ctx context.Context, db *gorm.DB, body func(tx *gorm.DB) error) error {
+	outcome := withSQLiteBusyRetryTx(ctx, db, body, false)
+	if outcome.TransactionErr == nil {
+		return outcome.CleanupErr
+	}
+	if outcome.CleanupErr == nil {
+		return outcome.TransactionErr
+	}
+	return errors.Join(outcome.TransactionErr, outcome.CleanupErr)
+}
+
+// SQLiteTxOutcome separates the transaction result from connection cleanup.
+// BodyCompleted is true only when the body returned nil with a live context.
+// CommitNotApplied identifies a failed SQLite commit that did not take effect.
+type SQLiteTxOutcome struct {
+	TransactionErr   error
+	CleanupErr       error
+	BodyCompleted    bool
+	CommitNotApplied bool
+}
+
+// WithSQLiteBusyRetryTxOutcome retries busy attempts only until a body completes.
+// Cleanup errors are reported separately after the connection has been discarded.
+func WithSQLiteBusyRetryTxOutcome(ctx context.Context, db *gorm.DB, body func(tx *gorm.DB) error) SQLiteTxOutcome {
+	return withSQLiteBusyRetryTx(ctx, db, body, true)
+}
+
+func withSQLiteBusyRetryTx(ctx context.Context, db *gorm.DB, body func(tx *gorm.DB) error, strict bool) (outcome SQLiteTxOutcome) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if db.Dialector == nil || db.Name() != "sqlite" {
-		return db.WithContext(ctx).Transaction(body)
+	if strict {
+		originalBody := body
+		body = func(tx *gorm.DB) error {
+			if err := originalBody(tx); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			outcome.BodyCompleted = true
+			return nil
+		}
 	}
-	return db.WithContext(ctx).Connection(func(connDB *gorm.DB) (resultErr error) {
+	if db.Dialector == nil || db.Name() != "sqlite" {
+		outcome.TransactionErr = db.WithContext(ctx).Transaction(body)
+		return outcome
+	}
+	outcome.TransactionErr = db.WithContext(ctx).Connection(func(connDB *gorm.DB) error {
 		conn, ok := connDB.Statement.ConnPool.(*sql.Conn)
 		if !ok || conn == nil {
 			return errors.New("sqlite busy retry did not receive a pinned SQL connection")
@@ -40,32 +81,49 @@ func WithSQLiteBusyRetryTx(ctx context.Context, db *gorm.DB, body func(tx *gorm.
 		if err := connDB.WithContext(ctx).Raw("PRAGMA busy_timeout").Scan(&originalBusyTimeout).Error; err != nil {
 			return err
 		}
+		discarded := false
 		defer func() {
-			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sqliteBusyRestoreTimeout)
+			if discarded {
+				return
+			}
+			restoreParent := context.WithoutCancel(ctx)
+			if strict {
+				restoreParent = ctx
+			}
+			restoreCtx, cancel := context.WithTimeout(restoreParent, sqliteBusyRestoreTimeout)
 			defer cancel()
-			restoreErr := connDB.WithContext(restoreCtx).Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", originalBusyTimeout)).Error
+			restoreErr := restoreCtx.Err()
 			if restoreErr == nil {
-				return
+				restoreErr = connDB.WithContext(restoreCtx).Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", originalBusyTimeout)).Error
 			}
-			discardSQLiteConnection(conn)
-			restoreErr = fmt.Errorf("restore SQLite busy timeout: %w", restoreErr)
-			if resultErr == nil {
-				resultErr = restoreErr
-				return
+			if restoreErr != nil {
+				discardSQLiteConnection(conn)
+				outcome.CleanupErr = fmt.Errorf("restore SQLite busy timeout: %w", restoreErr)
 			}
-			resultErr = errors.Join(resultErr, restoreErr)
 		}()
 		if err := connDB.WithContext(ctx).Exec("PRAGMA busy_timeout = 0").Error; err != nil {
 			return err
 		}
-		return retrySQLiteBusyTransaction(ctx, connDB, body)
+		err := retrySQLiteBusyTransaction(ctx, connDB, body, &outcome.BodyCompleted, strict)
+		if strict && outcome.BodyCompleted && err != nil {
+			// go-sqlite3 attempts a rollback after a failed COMMIT. Discard the
+			// connection in case that best-effort rollback failed.
+			outcome.CommitNotApplied = isSQLiteBusyOrLocked(err)
+			discardSQLiteConnection(conn)
+			discarded = true
+		}
+		return err
 	})
+	return outcome
 }
 
-func retrySQLiteBusyTransaction(ctx context.Context, db *gorm.DB, body func(tx *gorm.DB) error) error {
+func retrySQLiteBusyTransaction(ctx context.Context, db *gorm.DB, body func(tx *gorm.DB) error, completed *bool, strict bool) error {
 	var lastBusyErr error
 	for attempt := range sqliteBusyRetryAttempts {
 		err := db.WithContext(ctx).Transaction(body)
+		if strict && *completed {
+			return err
+		}
 		if err == nil {
 			return nil
 		}

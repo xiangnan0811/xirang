@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test__, createNodesApi } from "./nodes-api";
+import { ApiError, formatTime } from "./core";
+import { __test__, createNodesApi, isNodeProbeStaleError, isNodeRevisionConflictError } from "./nodes-api";
+
+const PROBE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const REVISION = "0123456789abcdef0123456789abcdef";
 
 function createMockResponse(status = 200, body = "") {
   return {
     status,
     ok: status >= 200 && status < 300,
+    // Error responses read Retry-After, so the fixture needs a header lookup like a real Response.
+    headers: { get: vi.fn().mockReturnValue(null) },
     text: vi.fn().mockResolvedValue(body),
   } as unknown as Response;
 }
@@ -93,7 +99,7 @@ describe("nodes api", () => {
             status: "online",
             backup_dir: "db-1",
           },
-          warning: "备份目录标识已更改，旧路径 /backup/old 下的数据不会自动迁移",
+          warning: "备份目录标识已更改，已有备份数据不会自动迁移",
         },
       }))
     );
@@ -116,7 +122,7 @@ describe("nodes api", () => {
       status: "online",
       backupDir: "db-1",
     });
-    expect(result.warning).toContain("备份目录标识已更改");
+    expect(result.warning).toBe("备份目录标识已更改，已有备份数据不会自动迁移");
 
     const wrapperMappedAsNode = __test__.mapNode({
       node: { id: 7, name: "db-1", host: "10.0.0.7" },
@@ -177,6 +183,104 @@ describe("nodes api", () => {
     expect(node).not.toHaveProperty("diskFreePercent");
     expect(node).not.toHaveProperty("lastProbeAt");
     expect(node).not.toHaveProperty("diskProbeAt");
+  });
+
+  it("keeps the raw tags string and an exact blank base_path for editor round-trips", () => {
+    const node = __test__.mapNode({
+      id: 4,
+      name: "edge-2",
+      host: "10.0.0.4",
+      tags: " prod,, web ,prod",
+      base_path: "",
+    });
+
+    expect(node.tags).toEqual(["prod", "web", "prod"]);
+    expect(node.rawTags).toBe(" prod,, web ,prod");
+    expect(node.basePath).toBe("");
+    expect(__test__.mapNode({ id: 5, name: "edge-3", host: "10.0.0.5" }).rawTags).toBe("");
+  });
+
+  it("derives the backup sort instant from the original RFC3339 timestamp with offset and nanoseconds", () => {
+    const map = (lastBackupAt?: string | null) =>
+      __test__.mapNode({ id: 9, name: "edge-9", host: "10.0.0.9", last_backup_at: lastBackupAt });
+    const instant = (value: string) => map(value).lastBackupInstant;
+    const fallBackEst = Date.UTC(2026, 10, 1, 6, 30) / 1000;
+
+    // Same wall clock on both sides of the America/New_York fall-back is one hour apart.
+    expect(instant("2026-11-01T01:30:00-04:00")).toEqual({ epochSeconds: fallBackEst - 3600, nanoseconds: 0 });
+    expect(instant("2026-11-01T01:30:00-05:00")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    // Different offsets naming the same moment produce the same instant.
+    expect(instant("2026-11-01T06:30:00Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    expect(instant("2026-11-01T12:00:00+05:30")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 0 });
+    // SQLite microseconds and Go nanoseconds stay distinct below the millisecond.
+    expect(instant("2026-11-01T06:30:00.123456Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 123_456_000 });
+    expect(instant("2026-11-01T06:30:00.123456789Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 123_456_789 });
+    expect(instant("2026-11-01T06:30:00.5Z")).toEqual({ epochSeconds: fallBackEst, nanoseconds: 500_000_000 });
+    // Epoch and pre-epoch seconds are signed real values, not "missing".
+    expect(instant("1970-01-01T00:00:00Z")).toEqual({ epochSeconds: 0, nanoseconds: 0 });
+    expect(instant("1969-12-31T23:59:59.5Z")).toEqual({ epochSeconds: -1, nanoseconds: 500_000_000 });
+    expect(instant("2028-02-29T00:00:00Z")).toEqual({ epochSeconds: Date.UTC(2028, 1, 29) / 1000, nanoseconds: 0 });
+
+    // The display string (shown in the UI and exported to CSV) is unchanged.
+    expect(map("2026-11-01T01:30:00-04:00").lastBackupAt).toBe(formatTime("2026-11-01T01:30:00-04:00"));
+    expect(map(null).lastBackupAt).toBe("-");
+    expect(map("not-a-time").lastBackupAt).toBe("not-a-time");
+
+    for (const invalid of [
+      undefined,
+      null,
+      "",
+      "not-a-time",
+      "2026-11-01T01:30:00", // zone-less local time
+      "2026-11-01 01:30:00Z",
+      "2026-02-29T00:00:00Z",
+      "2026-04-31T00:00:00Z",
+      "2026-13-01T00:00:00Z",
+      "2026-11-00T00:00:00Z",
+      "2026-11-01T24:00:00Z",
+      "2026-11-01T01:60:00Z",
+      "2026-11-01T01:30:60Z",
+      "2026-11-01T01:30:00.1234567891Z",
+      "2026-11-01T01:30:00+24:00",
+      "2026-11-01T01:30:00+05:60",
+      "2026-11-01T01:30:00+0500",
+    ]) {
+      expect(map(invalid)).not.toHaveProperty("lastBackupInstant");
+    }
+  });
+
+  it("updateNode omits untouched maintenance fields and sends empty strings to clear them", async () => {
+    const nodeBody = JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: { node: { id: 7, name: "db-1", host: "10.0.0.7" } },
+    });
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody))
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody));
+    const base = {
+      name: "db-1",
+      host: "10.0.0.7",
+      port: 22,
+      username: "root",
+      authType: "key" as const,
+      keyId: "key-3",
+      tags: " prod,, web ",
+      basePath: "",
+    };
+
+    await api.updateNode("token-node", 7, base);
+    await api.updateNode("token-node", 7, { ...base, maintenanceStart: "", maintenanceEnd: "" });
+
+    const untouched = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(untouched).not.toHaveProperty("maintenance_start");
+    expect(untouched).not.toHaveProperty("maintenance_end");
+    expect(untouched).not.toHaveProperty("expiry_date");
+    expect(untouched).toMatchObject({ tags: " prod,, web ", base_path: "", ssh_key_id: 3 });
+
+    const cleared = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(cleared).toMatchObject({ maintenance_start: "", maintenance_end: "" });
+    expect(cleared).not.toHaveProperty("expiry_date");
   });
 
   it("maps test-connection and emergency-backup snake_case results", async () => {
@@ -363,5 +467,144 @@ describe("nodes api", () => {
       openAlerts: 0,
       runningTasks: 0,
     });
+  });
+
+  it("maps an opaque probe_token on node reads and omits a null or empty one", () => {
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: PROBE_TOKEN }).probeToken).toBe(PROBE_TOKEN);
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: null })).not.toHaveProperty("probeToken");
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h", probe_token: "" })).not.toHaveProperty("probeToken");
+    expect(__test__.mapNode({ id: 1, name: "a", host: "h" })).not.toHaveProperty("probeToken");
+  });
+
+  it("maps an applied test's probe_token and reduces a stale result to its message", async () => {
+    const envelope = (data: Record<string, unknown>) => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data }));
+    fetchMock
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "未知主机密钥被拒绝",
+        probe_at: "2026-09-01T00:00:00Z",
+        probe_token: PROBE_TOKEN,
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        stale: true,
+        message: "已有更新的连接测试",
+        probe_at: "2026-09-01T00:00:00Z",
+        probe_token: PROBE_TOKEN,
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+      }));
+
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toMatchObject({
+      ok: false,
+      probeToken: PROBE_TOKEN,
+      errorCode: "ssh_host_key_unknown",
+      hostKey: { fingerprintSha256: "SHA256:abc" },
+    });
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toEqual({
+      ok: false,
+      stale: true,
+      message: "已有更新的连接测试",
+    });
+  });
+
+  it("trustNodeHostKey binds the trust to the reviewed probe token when one is known", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: { already_trusted: false, algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+    })));
+
+    await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ fingerprint_sha256: "SHA256:abc", probe_token: PROBE_TOKEN });
+  });
+
+  it("recognizes only the node_probe_stale conflict as a stale trust", async () => {
+    const conflict = (errorCode: string) => createMockResponse(409, JSON.stringify({
+      code: 409,
+      message: "conflict",
+      data: { error_code: errorCode },
+    }));
+    fetchMock
+      .mockResolvedValueOnce(conflict("node_probe_stale"))
+      .mockResolvedValueOnce(conflict("ssh_host_key_changed"));
+
+    const stale = await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN).catch((error: unknown) => error);
+    const changed = await api.trustNodeHostKey("token-node", 7, "SHA256:abc", PROBE_TOKEN).catch((error: unknown) => error);
+
+    expect(stale).toBeInstanceOf(ApiError);
+    expect(isNodeProbeStaleError(stale)).toBe(true);
+    expect(isNodeProbeStaleError(changed)).toBe(false);
+    expect(isNodeProbeStaleError(new Error("node_probe_stale"))).toBe(false);
+  });
+
+  it("maps the configuration revision and the latest test outcome with its applicability", () => {
+    const node = __test__.mapNode({
+      id: 1,
+      name: "a",
+      host: "h",
+      status: "offline",
+      revision: REVISION,
+      connection_test: { status: "online", current: false },
+    });
+    expect(node).toMatchObject({ status: "offline", revision: REVISION, connectionTest: { status: "online", current: false } });
+
+    const legacy = __test__.mapNode({ id: 1, name: "a", host: "h", revision: "", connection_test: null });
+    expect(legacy).not.toHaveProperty("revision");
+    expect(legacy).not.toHaveProperty("connectionTest");
+    for (const connectionTest of [{ status: "warning", current: true }, { status: "online" }, {}]) {
+      expect(__test__.mapNode({ id: 1, name: "a", host: "h", connection_test: connectionTest })).not.toHaveProperty("connectionTest");
+    }
+  });
+
+  it("sends the opened revision with an update only when the editor knows one", async () => {
+    const nodeBody = JSON.stringify({ code: 0, message: "ok", data: { node: { id: 7, name: "db-1", host: "10.0.0.7", revision: REVISION } } });
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody))
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody));
+    const input = { name: "db-1", host: "10.0.0.7", port: 22, username: "root", authType: "key" as const, tags: "" };
+
+    await expect(api.updateNode("token-node", 7, { ...input, expectedRevision: REVISION })).resolves.toMatchObject({ node: { revision: REVISION } });
+    await api.updateNode("token-node", 7, input);
+
+    const conditional = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(conditional.expected_revision).toBe(REVISION);
+    const legacy = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(legacy).not.toHaveProperty("expected_revision");
+  });
+
+  it("adds expected_revision to a test-connection request only when asked", async () => {
+    const envelope = () => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { ok: true, message: "alive" } }));
+    fetchMock.mockResolvedValueOnce(envelope()).mockResolvedValueOnce(envelope());
+
+    await api.testNodeConnection("token-node", 7, { expectedRevision: REVISION });
+    await api.testNodeConnection("token-node", 7);
+
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[0]).toBe(`/api/v1/nodes/7/test-connection?expected_revision=${REVISION}`);
+    expect((fetchMock.mock.calls[1] as [string, RequestInit])[0]).toBe("/api/v1/nodes/7/test-connection");
+  });
+
+  it("recognizes only the node_revision_conflict refusal as a revision conflict", async () => {
+    const conflict = (errorCode: string) => createMockResponse(409, JSON.stringify({
+      code: 409,
+      message: "conflict",
+      data: { error_code: errorCode },
+    }));
+    fetchMock
+      .mockResolvedValueOnce(conflict("node_revision_conflict"))
+      .mockResolvedValueOnce(conflict("backup_dir_conflict"));
+    const input = { name: "db-1", host: "10.0.0.7", port: 22, username: "root", authType: "key" as const, tags: "", expectedRevision: REVISION };
+
+    const stale = await api.updateNode("token-node", 7, input).catch((error: unknown) => error);
+    const other = await api.updateNode("token-node", 7, input).catch((error: unknown) => error);
+
+    expect(isNodeRevisionConflictError(stale)).toBe(true);
+    expect(isNodeProbeStaleError(stale)).toBe(false);
+    expect(isNodeRevisionConflictError(other)).toBe(false);
+    expect(isNodeRevisionConflictError(new Error("node_revision_conflict"))).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -45,15 +46,36 @@ type CreateNodeInput struct {
 	ExpiryDate       *string
 	Archived         *bool
 	UseSudo          *bool
+	ExpectedRevision *string
 }
 
 func validationError(msg string) error {
 	return fmt.Errorf("%w: %s", apperr.ErrValidation, msg)
 }
 
+// ValidateExpectedRevision accepts an omitted revision or a lowercase 128-bit hex token.
+func ValidateExpectedRevision(expected *string) error {
+	if expected == nil {
+		return nil
+	}
+	if len(*expected) != 32 {
+		return validationError("expected_revision must be 32 lowercase hexadecimal characters")
+	}
+	for _, c := range *expected {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return validationError("expected_revision must be 32 lowercase hexadecimal characters")
+		}
+	}
+	return nil
+}
+
 // Create validates the input and creates a new node. It returns the created
 // node with SSHKey preloaded, or an error.
 func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model.Node, error) {
+	if err := validateNodeStatus(input.Status); err != nil {
+		return nil, err
+	}
+
 	// Set defaults
 	if input.Port == 0 {
 		input.Port = 22
@@ -76,6 +98,9 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	if err := s.validateSSHRef(ctx, input); err != nil {
 		return nil, validationError(err.Error())
 	}
+	if err := ValidateBasePath(input.BasePath); err != nil {
+		return nil, validationError(err.Error())
+	}
 
 	// Handle backup dir: auto-generate from name if empty
 	backupDir := input.BackupDir
@@ -87,6 +112,10 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	}
 	if err := validateBackupDir(backupDir); err != nil {
 		return nil, validationError(err.Error())
+	}
+	applyTimes, err := optionalTimePatch(input)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build node model
@@ -117,112 +146,132 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 		}
 	}
 
+	if applyTimes != nil {
+		if err := applyTimes(&node); err != nil {
+			return nil, err
+		}
+	}
 	applyOptionalFields(&node, input)
 
 	if err := s.repo.Create(ctx, &node); err != nil {
+		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
+			return nil, validationError("所选密钥不存在，请重新选择")
+		}
 		err = apperr.WrapDBError(err)
 		return nil, err
 	}
 
-	// Reload with associations
-	nodePtr, err := s.repo.FindByIDWithSSHKey(ctx, node.ID)
-	if err != nil {
-		return nil, err
-	}
-	return nodePtr, nil
+	return &node, nil
 }
 
 // Update validates the input and updates an existing node. It returns the
 // updated node (with SSHKey preloaded) and the previous backup directory
 // identifier (for change-warning messages), or an error.
 func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput) (*model.Node, string, error) {
-	node, err := s.repo.FindByID(ctx, id)
-	if err != nil {
+	if err := ValidateExpectedRevision(input.ExpectedRevision); err != nil {
 		return nil, "", err
 	}
-
-	oldBackupDir := node.BackupDir
-
-	// Merge defaults from existing node for unspecified fields
-	if input.Port == 0 {
-		input.Port = 22
+	if err := validateNodeStatus(input.Status); err != nil {
+		return nil, "", err
 	}
-	if input.AuthType == "" {
-		input.AuthType = node.AuthType
-	}
-	if input.Status == "" {
-		input.Status = node.Status
-	}
-	if input.BasePath == "" {
-		input.BasePath = node.BasePath
-	}
-	if strings.TrimSpace(input.BackupDir) == "" {
-		input.BackupDir = node.BackupDir
-	}
-	if input.SSHKeyID == nil {
-		input.SSHKeyID = node.SSHKeyID
-	}
-	if input.Password == "" {
-		input.Password = node.Password
-	}
-	if input.PrivateKey == "" {
-		input.PrivateKey = node.PrivateKey
-	}
-
-	// Validate
-	if err := validateBackupDir(input.BackupDir); err != nil {
-		return nil, "", validationError(err.Error())
-	}
-	if err := validateNodeName(input.Name); err != nil {
-		return nil, "", validationError(err.Error())
-	}
-	input.Host = strings.TrimSpace(input.Host)
-	if err := ValidateNodeHostPort(input.Host, input.Port); err != nil {
-		return nil, "", validationError(err.Error())
-	}
-	if err := s.validateSSHRef(ctx, input); err != nil {
-		return nil, "", validationError(err.Error())
-	}
-
-	// Update node fields
-	node.Name = input.Name
-	node.Host = input.Host
-	node.Port = input.Port
-	node.Username = input.Username
-	node.AuthType = input.AuthType
-	node.Tags = input.Tags
-	node.Status = input.Status
-	node.BasePath = input.BasePath
-	node.BackupDir = input.BackupDir
-
-	switch input.AuthType {
-	case "password":
-		node.Password = input.Password
-		node.SSHKeyID = nil
-		node.PrivateKey = ""
-	case "key":
-		node.Password = ""
-		node.SSHKeyID = input.SSHKeyID
-		if input.SSHKeyID == nil {
-			node.PrivateKey = input.PrivateKey
-		} else {
-			node.PrivateKey = ""
+	// An echoed path is not an edit. Capture that intent before entering the
+	// write, while inheriting the actual value from the locked row below.
+	updateBasePath := false
+	if input.BasePath != "" {
+		current, err := s.repo.FindByID(ctx, id)
+		if err != nil {
+			return nil, "", err
 		}
+		updateBasePath = input.BasePath != current.BasePath
 	}
-
-	applyOptionalFields(node, input)
-
-	if err := s.repo.Update(ctx, node); err != nil {
-		err = apperr.WrapDBError(err)
-		return nil, "", err
+	node := &model.Node{ID: id}
+	var oldBackupDir string
+	options := repository.NodeUpdateOptions{
+		ExpectedRevision: input.ExpectedRevision,
+		UpdateStatus:     input.Status != "",
+		UpdateBasePath:   updateBasePath,
+		Merge: func(current *model.Node) error {
+			oldBackupDir = current.BackupDir
+			merged := input
+			if merged.Port == 0 {
+				merged.Port = 22
+			}
+			if merged.AuthType == "" {
+				merged.AuthType = current.AuthType
+			}
+			if strings.TrimSpace(merged.BackupDir) == "" {
+				merged.BackupDir = current.BackupDir
+			}
+			if merged.SSHKeyID == nil {
+				merged.SSHKeyID = current.SSHKeyID
+			}
+			if merged.Password == "" {
+				merged.Password = current.Password
+			}
+			if merged.PrivateKey == "" {
+				merged.PrivateKey = current.PrivateKey
+			}
+			if err := validateBackupDir(merged.BackupDir); err != nil {
+				return validationError(err.Error())
+			}
+			if err := validateNodeName(merged.Name); err != nil {
+				return validationError(err.Error())
+			}
+			merged.Host = strings.TrimSpace(merged.Host)
+			if err := ValidateNodeHostPort(merged.Host, merged.Port); err != nil {
+				return validationError(err.Error())
+			}
+			if err := validateSSHInputs(merged); err != nil {
+				return validationError(err.Error())
+			}
+			if updateBasePath && merged.BasePath != current.BasePath {
+				if err := ValidateBasePath(merged.BasePath); err != nil {
+					return validationError(err.Error())
+				}
+			}
+			applyTimes, err := optionalTimePatch(merged)
+			if err != nil {
+				return err
+			}
+			if applyTimes != nil {
+				if err := applyTimes(current); err != nil {
+					return err
+				}
+			}
+			current.Name, current.Host, current.Port = merged.Name, merged.Host, merged.Port
+			current.Username, current.AuthType, current.Tags = merged.Username, merged.AuthType, merged.Tags
+			current.BackupDir = merged.BackupDir
+			if merged.Status != "" {
+				current.Status = merged.Status
+			}
+			if updateBasePath {
+				current.BasePath = merged.BasePath
+			}
+			switch merged.AuthType {
+			case "password":
+				current.Password, current.PrivateKey, current.SSHKeyID = merged.Password, "", nil
+			case "key":
+				current.Password, current.SSHKeyID = "", merged.SSHKeyID
+				if merged.SSHKeyID == nil {
+					current.PrivateKey = merged.PrivateKey
+				} else {
+					current.PrivateKey = ""
+				}
+			}
+			applyOptionalFields(current, merged)
+			return nil
+		},
 	}
-
-	// Reload with associations
-	nodePtr, err := s.repo.FindByIDWithSSHKey(ctx, node.ID)
-	if err != nil {
-		return nil, "", err
+	if err := s.repo.Update(ctx, node, options); err != nil {
+		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
+			return nil, "", validationError("所选密钥不存在，请重新选择")
+		}
+		if errors.Is(err, apperr.ErrValidation) || errors.Is(err, repository.ErrNodeRevisionConflict) {
+			return nil, "", err
+		}
+		return nil, "", apperr.WrapDBError(err)
 	}
-	return nodePtr, oldBackupDir, nil
+	return node, oldBackupDir, nil
 }
 
 // Delete deletes a node and its associated policy links, tasks, and alerts in
@@ -239,27 +288,44 @@ func (s *NodeService) BatchDelete(ctx context.Context, ids []uint) (int64, []uin
 
 // --- validation helpers ---
 
+func validateNodeStatus(status string) error {
+	switch status {
+	case "", "online", "warning", "offline":
+		return nil
+	default:
+		return validationError("status must be online, warning, or offline")
+	}
+}
+
 func (s *NodeService) validateSSHRef(ctx context.Context, input CreateNodeInput) error {
+	if err := validateSSHInputs(input); err != nil {
+		return err
+	}
+	if input.AuthType == "key" && input.SSHKeyID != nil {
+		if _, err := s.repo.FindSSHKeyByID(ctx, *input.SSHKeyID); err != nil {
+			return fmt.Errorf("所选密钥不存在，请重新选择")
+		}
+	}
+	return nil
+}
+
+func validateSSHInputs(input CreateNodeInput) error {
 	switch input.AuthType {
 	case "password":
 		if input.Password == "" {
 			return fmt.Errorf("密码认证模式下请填写密码")
 		}
-		return nil
 	case "key":
 		if input.SSHKeyID == nil && input.PrivateKey == "" {
 			return fmt.Errorf("密钥认证模式下请选择已有密钥或填写私钥内容")
 		}
-		if input.SSHKeyID != nil {
-			_, err := s.repo.FindSSHKeyByID(ctx, *input.SSHKeyID)
-			if err != nil {
-				return fmt.Errorf("所选密钥不存在，请重新选择")
-			}
+		if input.SSHKeyID != nil && *input.SSHKeyID == 0 {
+			return fmt.Errorf("所选密钥不存在，请重新选择")
 		}
-		return nil
 	default:
 		return fmt.Errorf("不支持的认证方式")
 	}
+	return nil
 }
 
 func validateNodeName(name string) error {
@@ -347,28 +413,77 @@ func SanitizeBackupDir(name string) string {
 
 // --- helpers ---
 
+type optionalTime struct {
+	set   bool
+	value *time.Time
+}
+
+func parseOptionalTime(raw *string, field string) (optionalTime, error) {
+	if raw == nil {
+		return optionalTime{}, nil
+	}
+	if *raw == "" {
+		return optionalTime{set: true}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, *raw)
+	if err != nil {
+		return optionalTime{}, validationError(field + " must be an RFC3339 timestamp")
+	}
+	parsed = parsed.UTC().Truncate(time.Microsecond)
+	if parsed.Year() < 0 || parsed.Year() > 9999 {
+		return optionalTime{}, validationError(field + " must be an RFC3339 timestamp")
+	}
+	return optionalTime{set: true, value: &parsed}, nil
+}
+
+func optionalTimePatch(input CreateNodeInput) (func(*model.Node) error, error) {
+	start, err := parseOptionalTime(input.MaintenanceStart, "maintenance_start")
+	if err != nil {
+		return nil, err
+	}
+	end, err := parseOptionalTime(input.MaintenanceEnd, "maintenance_end")
+	if err != nil {
+		return nil, err
+	}
+	expiry, err := parseOptionalTime(input.ExpiryDate, "expiry_date")
+	if err != nil {
+		return nil, err
+	}
+	if !start.set && !end.set && !expiry.set {
+		return nil, nil
+	}
+	return func(node *model.Node) error {
+		maintenanceStart, maintenanceEnd := node.MaintenanceStart, node.MaintenanceEnd
+		startChanged := setOptionalTime(&maintenanceStart, start)
+		endChanged := setOptionalTime(&maintenanceEnd, end)
+		if startChanged || endChanged {
+			if (maintenanceStart == nil) != (maintenanceEnd == nil) ||
+				(maintenanceStart != nil && !maintenanceEnd.Truncate(time.Microsecond).After(maintenanceStart.Truncate(time.Microsecond))) {
+				return validationError("maintenance_start and maintenance_end must both be set with maintenance_end after maintenance_start, or both cleared")
+			}
+		}
+		node.MaintenanceStart = maintenanceStart
+		node.MaintenanceEnd = maintenanceEnd
+		setOptionalTime(&node.ExpiryDate, expiry)
+		return nil
+	}, nil
+}
+
+func setOptionalTime(current **time.Time, patch optionalTime) bool {
+	if !patch.set {
+		return false
+	}
+	if *current == nil && patch.value == nil {
+		return false
+	}
+	if *current != nil && patch.value != nil && (*current).UTC().Truncate(time.Microsecond).Equal(*patch.value) {
+		return false
+	}
+	*current = patch.value
+	return true
+}
+
 func applyOptionalFields(node *model.Node, input CreateNodeInput) {
-	if input.MaintenanceStart != nil {
-		if *input.MaintenanceStart == "" {
-			node.MaintenanceStart = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.MaintenanceStart); err == nil {
-			node.MaintenanceStart = &t
-		}
-	}
-	if input.MaintenanceEnd != nil {
-		if *input.MaintenanceEnd == "" {
-			node.MaintenanceEnd = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.MaintenanceEnd); err == nil {
-			node.MaintenanceEnd = &t
-		}
-	}
-	if input.ExpiryDate != nil {
-		if *input.ExpiryDate == "" {
-			node.ExpiryDate = nil
-		} else if t, err := time.Parse(time.RFC3339, *input.ExpiryDate); err == nil {
-			node.ExpiryDate = &t
-		}
-	}
 	if input.Archived != nil {
 		node.Archived = *input.Archived
 	}

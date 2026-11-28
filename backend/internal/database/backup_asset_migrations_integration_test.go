@@ -57,7 +57,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 99
+	latestMigrationVersion                      = 101
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
@@ -8220,6 +8220,18 @@ func (recoveryMigrationFirstWriteWorkspaceKeySource) ByVersion(
 		return backupasset.DomainKeyMaterial{}, backupasset.ErrKeyUnavailable
 	}
 	return material, nil
+}
+
+func (source recoveryMigrationFirstWriteWorkspaceKeySource) ByVersionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	domain backupasset.KeyDomain,
+	version int,
+) (backupasset.DomainKeyMaterial, error) {
+	if tx == nil {
+		return backupasset.DomainKeyMaterial{}, errors.New("missing worker transaction")
+	}
+	return source.ByVersion(ctx, domain, version)
 }
 
 func (fixture migrationFixture) test069WorkerFirstWrite(t *testing.T) {

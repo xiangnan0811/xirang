@@ -261,6 +261,16 @@ func knownHostsCertAuthorityLines(content []byte) map[int]bool {
 // ResolveSSHHostKeyCallback returns the host key callback based on env config
 // and the dynamic ssh.auto_accept_new_hosts setting.
 func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
+	return ResolveSSHHostKeyCallbackWithGuard(nil)
+}
+
+// KnownHostsWriteGuard runs prepare while holding the caller's identity locks,
+// then checks authority before invoking write under those same locks.
+type KnownHostsWriteGuard func(prepare, write func() error) error
+
+// ResolveSSHHostKeyCallbackWithGuard serializes automatic acceptance with the
+// caller's identity check.
+func ResolveSSHHostKeyCallbackWithGuard(guard KnownHostsWriteGuard) (ssh.HostKeyCallback, error) {
 	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return nil, err
@@ -291,16 +301,13 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 					return &HostKeyError{Kind: HostKeyUnknown, Key: key}
 				}
 				log.Printf("info: 自动接受未知主机密钥并写入 known_hosts；可在 系统设置 → 安全 中关闭")
-				if _, recordErr := recordNewKnownHost(knownHostsPath, hostname, remote, key); recordErr != nil {
-					var hostKeyErr *HostKeyError
-					if errors.As(recordErr, &hostKeyErr) {
-						return hostKeyErr
-					}
-					return fmt.Errorf("knownhosts: accept new host failed")
+				_, recordErr := recordNewKnownHostWithGuard(knownHostsPath, hostname, remote, key, guard)
+				if recordErr != nil {
+					return recordErr
 				}
-				refreshedCallback, refreshErr := knownhosts.New(knownHostsPath)
+				refreshedCallback, refreshErr := verifyCurrentKnownHost(hostname, remote, key)
 				if refreshErr != nil {
-					return fmt.Errorf("加载 known_hosts 失败")
+					return refreshErr
 				}
 				callback = refreshedCallback
 				return nil
@@ -416,31 +423,128 @@ func AppendKnownHost(path, hostname string, key ssh.PublicKey) error {
 // alreadyTrusted when the exact key is already recorded and a mismatch
 // HostKeyError when a different key is.
 func recordNewKnownHost(path, hostname string, remote net.Addr, key ssh.PublicKey) (alreadyTrusted bool, err error) {
+	return recordNewKnownHostWithGuard(path, hostname, remote, key, nil)
+}
+
+// The file mutex precedes the caller's identity lock, and remains held through
+// the conflict check and guarded append. Other mutex holders never acquire DB locks.
+func recordNewKnownHostWithGuard(path, hostname string, remote net.Addr, key ssh.PublicKey, guard KnownHostsWriteGuard) (alreadyTrusted bool, err error) {
 	knownHostsWriteMu.Lock()
 	defer knownHostsWriteMu.Unlock()
 
 	if err := ensureKnownHostsFile(path); err != nil {
 		return false, fmt.Errorf("准备 known_hosts 失败")
 	}
+	var file *os.File
+	var initial os.FileInfo
+	if guard != nil {
+		file, err = os.Open(path)
+		if err != nil {
+			return false, fmt.Errorf("准备 known_hosts 失败")
+		}
+		defer file.Close() //nolint:errcheck
+		initial, err = file.Stat()
+		if err != nil {
+			return false, fmt.Errorf("准备 known_hosts 失败")
+		}
+	}
 	verify, err := knownhosts.New(path)
 	if err != nil {
 		return false, fmt.Errorf("加载 known_hosts 失败")
 	}
 	verifyErr := verify(hostname, remote, key)
-	if verifyErr == nil {
-		return true, nil
+	alreadyTrusted = verifyErr == nil
+	if verifyErr != nil {
+		var keyErr *knownhosts.KeyError
+		if !errors.As(verifyErr, &keyErr) {
+			return false, fmt.Errorf("knownhosts: host key verification failed")
+		}
+		if len(keyErr.Want) > 0 {
+			return false, &HostKeyError{Kind: HostKeyMismatch, Key: key}
+		}
 	}
-	var keyErr *knownhosts.KeyError
-	if !errors.As(verifyErr, &keyErr) {
-		return false, verifyErr
+	if guard == nil {
+		if !alreadyTrusted {
+			if err := appendKnownHostLocked(path, hostname, key); err != nil {
+				return false, fmt.Errorf("写入 known_hosts 失败")
+			}
+			if _, err := verifyCurrentKnownHost(hostname, remote, key); err != nil {
+				return false, err
+			}
+		}
+		return alreadyTrusted, nil
 	}
-	if len(keyErr.Want) > 0 {
-		return false, &HostKeyError{Kind: HostKeyMismatch, Key: key}
+	// Prepare the append before taking the identity locks. The preflight checks
+	// that both the selected descriptor and the active path match the snapshot.
+	var entry string
+	if !alreadyTrusted {
+		prefix := ""
+		if initial.Size() > 0 {
+			var last [1]byte
+			if _, err := file.ReadAt(last[:], initial.Size()-1); err != nil {
+				return false, fmt.Errorf("准备 known_hosts 失败")
+			}
+			if last[0] != '\n' {
+				prefix = "\n"
+			}
+		}
+		entry = prefix + knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key) + "\n"
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return false, fmt.Errorf("准备 known_hosts 失败")
+		}
+		defer file.Close() //nolint:errcheck
 	}
-	if err := appendKnownHostLocked(path, hostname, key); err != nil {
-		return false, fmt.Errorf("写入 known_hosts 失败")
+	prepare := func() error {
+		currentPath, err := knownHostsPathFromEnv()
+		if err != nil {
+			return fmt.Errorf("known_hosts 在操作期间发生变化，操作已取消")
+		}
+		fdInfo, fdErr := file.Stat()
+		pathInfo, pathErr := os.Stat(currentPath)
+		if fdErr != nil || pathErr != nil || !os.SameFile(initial, fdInfo) || !os.SameFile(initial, pathInfo) ||
+			initial.Size() != fdInfo.Size() || initial.Size() != pathInfo.Size() ||
+			!initial.ModTime().Equal(fdInfo.ModTime()) || !initial.ModTime().Equal(pathInfo.ModTime()) {
+			return fmt.Errorf("known_hosts 在操作期间发生变化，操作已取消")
+		}
+		return nil
 	}
-	return false, nil
+	write := func() error {
+		if !alreadyTrusted {
+			if _, err := file.WriteString(entry); err != nil {
+				return fmt.Errorf("写入 known_hosts 失败")
+			}
+		}
+		return nil
+	}
+	if err := guard(prepare, write); err != nil {
+		return false, err
+	}
+	if _, err := verifyCurrentKnownHost(hostname, remote, key); err != nil {
+		return false, err
+	}
+	return alreadyTrusted, nil
+}
+
+// verifyCurrentKnownHost reloads the configured file without creating it and
+// verifies the presented key using the normal known_hosts callback.
+func verifyCurrentKnownHost(hostname string, remote net.Addr, key ssh.PublicKey) (ssh.HostKeyCallback, error) {
+	path, err := knownHostsPathFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("加载 known_hosts 失败")
+	}
+	verify, err := knownhosts.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("加载 known_hosts 失败")
+	}
+	if err := verify(hostname, remote, key); err != nil {
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+			return nil, &HostKeyError{Kind: HostKeyMismatch, Key: key}
+		}
+		return nil, fmt.Errorf("knownhosts: host key verification failed")
+	}
+	return verify, nil
 }
 
 func appendKnownHostLocked(path, hostname string, key ssh.PublicKey) error {

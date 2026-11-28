@@ -2,11 +2,16 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"sort"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
 )
 
@@ -94,11 +99,48 @@ func (r *PolicyRepository) CreatePolicyNode(ctx context.Context, pn *model.Polic
 	return apperr.WrapDBError(r.db.WithContext(ctx).Create(pn).Error)
 }
 
+// LockPolicyCloneReferences pins the source associations and any extant drill
+// target. A legacy disabled template may already name a missing drill target.
+func (r *PolicyRepository) LockPolicyCloneReferences(ctx context.Context, nodes []model.Node, drillTarget *uint) error {
+	required := make(map[uint]bool, len(nodes)+1)
+	for _, node := range nodes {
+		required[node.ID] = true
+	}
+	if drillTarget != nil && *drillTarget > 0 {
+		if _, exists := required[*drillTarget]; !exists {
+			required[*drillTarget] = false
+		}
+	}
+	ids := make([]uint, 0, len(required))
+	for id := range required {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		var node model.Node
+		err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&node, id).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) && !required[id] {
+			continue
+		}
+		if err != nil {
+			return apperr.WrapDBError(err)
+		}
+	}
+	return nil
+}
+
 // Transaction executes fn within a database transaction. The fn receives
 // a new PolicyRepository that operates within the transaction.
 func (r *PolicyRepository) Transaction(ctx context.Context, fn func(repo repository.PolicyRepository) error) error {
+	var options *sql.TxOptions
+	if r.db.Name() == "postgres" {
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
 		txRepo := &PolicyRepository{db: tx}
 		return fn(txRepo)
-	})
+	}, options)
 }

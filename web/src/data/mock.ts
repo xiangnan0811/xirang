@@ -35,10 +35,13 @@ const nodeNames = [
 const tagPool = ["core", "db", "edge", "archive", "cdn", "critical", "prod", "staging"];
 const nowMinus = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
 
-function formatDate(minutesAgo: number): string {
-  const date = new Date(Date.now() - minutesAgo * 60_000);
+function formatLocalDateTime(date: Date): string {
   const p = (n: number) => n.toString().padStart(2, "0");
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+}
+
+function formatDate(minutesAgo: number): string {
+  return formatLocalDateTime(new Date(Date.now() - minutesAgo * 60_000));
 }
 
 function nodeStatusByIndex(index: number): NodeRecord["status"] {
@@ -94,6 +97,8 @@ export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
   const id = idx + 1;
   const status = nodeStatusByIndex(id);
   const host = `10.30.${Math.floor(id / 10) + 1}.${(id * 7) % 255}`;
+  // Display text and sort key come from one instant, as the API mapper derives both from one timestamp.
+  const lastBackup = new Date(Date.now() - (status === "offline" ? 500 : 10 + (id % 40)) * 60_000);
 
   return {
     id,
@@ -109,7 +114,11 @@ export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
     status,
     tags: [tagPool[idx % tagPool.length], tagPool[(idx + 2) % tagPool.length]],
     lastSeenAt: formatDate(status === "offline" ? 130 : 1 + (id % 4)),
-    lastBackupAt: formatDate(status === "offline" ? 500 : 10 + (id % 40)),
+    lastBackupAt: formatLocalDateTime(lastBackup),
+    lastBackupInstant: {
+      epochSeconds: Math.floor(lastBackup.getTime() / 1000),
+      nanoseconds: lastBackup.getUTCMilliseconds() * 1_000_000,
+    },
     connectionLatencyMs: 22 + (id * 9) % 78
   };
 });

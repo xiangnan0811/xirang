@@ -532,11 +532,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "gnutls-3.8.13-r0.apk",
+      "file": "gnutls-3.8.14-r0.apk",
       "name": "gnutls",
-      "sha256": "dab71bdfb0b974ddd93ba29efbd759c8dc263638b49b6be7ed9a3749fffe59f8",
-      "size": 969347,
-      "version": "3.8.13-r0"
+      "sha256": "909460fc85358ec5f7666fda66bd0873d0541272351c84137f1fe620302cb3d1",
+      "size": 971421,
+      "version": "3.8.14-r0"
     },
     {
       "arch": "x86_64",
@@ -924,11 +924,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libcrypto3-3.5.9-r0.apk",
+      "file": "libcrypto3-3.5.9-r1.apk",
       "name": "libcrypto3",
-      "sha256": "9c82c86f051f3372445ecdbae5068ccc39dbc423ba8f779eaa84549fef1cfc77",
-      "size": 1980193,
-      "version": "3.5.9-r0"
+      "sha256": "d155b548ac35f48823acc704184baa463bd86c4f59ea93aca5e8120f98902c9f",
+      "size": 1980123,
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -1052,11 +1052,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libexpat-2.10.0-r0.apk",
+      "file": "libexpat-2.11.0-r0.apk",
       "name": "libexpat",
-      "sha256": "3a9ab8d1b66d1b76c6b41d24501ab61057efa3993f7b85cf3ff043b749e06e6e",
-      "size": 63633,
-      "version": "2.10.0-r0"
+      "sha256": "53dd39ba2dff70c2252ea81ee727289341ea28735e8e2d4f3664f9e5e5c21763",
+      "size": 65229,
+      "version": "2.11.0-r0"
     },
     {
       "arch": "x86_64",
@@ -1068,11 +1068,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libffi-3.5.2-r0.apk",
+      "file": "libffi-3.8.2-r0.apk",
       "name": "libffi",
-      "sha256": "0b3473a1468bed5fbb913a1ffa121e253080b21b013fe47e0300bd7e85224e76",
-      "size": 18342,
-      "version": "3.5.2-r0"
+      "sha256": "8d470601a29ab4ed913f7c3e96e02f091f67fe1bb8808c19c13c5b6f4a165b13",
+      "size": 21174,
+      "version": "3.8.2-r0"
     },
     {
       "arch": "x86_64",
@@ -1660,11 +1660,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libssl3-3.5.9-r0.apk",
+      "file": "libssl3-3.5.9-r1.apk",
       "name": "libssl3",
-      "sha256": "b5ad11f5955b3b7ddfd8c32e8c1fdd79878d208bb4dfa9bbd8f35ddc59187242",
-      "size": 381864,
-      "version": "3.5.9-r0"
+      "sha256": "4048fc08e315f235f3c7cf8b89532cfcb167edbb343299b158761966ad101b17",
+      "size": 382096,
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -1948,11 +1948,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libxml2-2.13.9-r1.apk",
+      "file": "libxml2-2.13.9-r2.apk",
       "name": "libxml2",
-      "sha256": "1af363248efb54914993bbd516c89878c2b5b0c53be0c78bb43d5a3e9a8ceda6",
-      "size": 495335,
-      "version": "2.13.9-r1"
+      "sha256": "53cd72242e178e4887431abaf6c04f21307f406d578781f290f691569e8c7f0a",
+      "size": 495897,
+      "version": "2.13.9-r2"
     },
     {
       "arch": "x86_64",
@@ -2084,11 +2084,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "mbedtls-3.6.7-r0.apk",
+      "file": "mbedtls-3.6.8-r0.apk",
       "name": "mbedtls",
-      "sha256": "f5fdffab99d2db6f2035df533614d0aabf3004615bf8397b4bb34fcaccf87aa8",
-      "size": 413082,
-      "version": "3.6.7-r0"
+      "sha256": "9dad88824bbd5047335684bd7e674dc5382f0e4d3d7c7a6881c3cb739a09c3b4",
+      "size": 415835,
+      "version": "3.6.8-r0"
     },
     {
       "arch": "x86_64",
@@ -2908,19 +2908,19 @@
     },
     {
       "arch": "x86_64",
-      "file": "zstd-1.5.7-r2.apk",
+      "file": "zstd-1.6.0-r1.apk",
       "name": "zstd",
-      "sha256": "ab338dd697633382d1232c7077e137e6f966e074102f2f195adb492b34243fe6",
-      "size": 129692,
-      "version": "1.5.7-r2"
+      "sha256": "6e448afc904dd86c440b260ee295329b66cc168c2d27fb461304a79764f0c5e8",
+      "size": 134189,
+      "version": "1.6.0-r1"
     },
     {
       "arch": "x86_64",
-      "file": "zstd-libs-1.5.7-r2.apk",
+      "file": "zstd-libs-1.6.0-r1.apk",
       "name": "zstd-libs",
-      "sha256": "d5fcc58f7f071a5658d97b09838668e4443203217631992915b8e60656904104",
-      "size": 373813,
-      "version": "1.5.7-r2"
+      "sha256": "6b4ba996d4d41a361bd7d1fd2cd0fedd2436d3cec5fc944d7b489ad7f5621960",
+      "size": 346649,
+      "version": "1.6.0-r1"
     },
     {
       "arch": "x86_64",
@@ -3388,7 +3388,7 @@
     {
       "arch": "x86_64",
       "name": "gnutls",
-      "version": "3.8.13-r0"
+      "version": "3.8.14-r0"
     },
     {
       "arch": "x86_64",
@@ -3638,7 +3638,7 @@
     {
       "arch": "x86_64",
       "name": "libcrypto3",
-      "version": "3.5.9-r0"
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -3718,7 +3718,7 @@
     {
       "arch": "x86_64",
       "name": "libexpat",
-      "version": "2.10.0-r0"
+      "version": "2.11.0-r0"
     },
     {
       "arch": "x86_64",
@@ -3728,7 +3728,7 @@
     {
       "arch": "x86_64",
       "name": "libffi",
-      "version": "3.5.2-r0"
+      "version": "3.8.2-r0"
     },
     {
       "arch": "x86_64",
@@ -4098,7 +4098,7 @@
     {
       "arch": "x86_64",
       "name": "libssl3",
-      "version": "3.5.9-r0"
+      "version": "3.5.9-r1"
     },
     {
       "arch": "x86_64",
@@ -4278,7 +4278,7 @@
     {
       "arch": "x86_64",
       "name": "libxml2",
-      "version": "2.13.9-r1"
+      "version": "2.13.9-r2"
     },
     {
       "arch": "x86_64",
@@ -4363,7 +4363,7 @@
     {
       "arch": "x86_64",
       "name": "mbedtls",
-      "version": "3.6.7-r0"
+      "version": "3.6.8-r0"
     },
     {
       "arch": "x86_64",
@@ -4888,12 +4888,12 @@
     {
       "arch": "x86_64",
       "name": "zstd",
-      "version": "1.5.7-r2"
+      "version": "1.6.0-r1"
     },
     {
       "arch": "x86_64",
       "name": "zstd-libs",
-      "version": "1.5.7-r2"
+      "version": "1.6.0-r1"
     },
     {
       "arch": "x86_64",
@@ -4911,10 +4911,10 @@
     "font-noto-cjk=0_git20220127-r1",
     "font-noto=2026.11.01-r0",
     "gzip=1.14-r3",
-    "libcrypto3=3.5.9-r0",
-    "libexpat=2.10.0-r0",
+    "libcrypto3=3.5.9-r1",
+    "libexpat=2.11.0-r0",
     "libreoffice=25.8.1.1-r5",
-    "libssl3=3.5.9-r0",
+    "libssl3=3.5.9-r1",
     "musl-utils=1.2.5-r24",
     "musl=1.2.5-r24",
     "poppler-utils=25.12.0-r0",
@@ -4925,7 +4925,7 @@
     "vips-tools=8.17.3-r1",
     "xz=5.8.4-r0",
     "zlib=1.4-r0",
-    "zstd=1.5.7-r2"
+    "zstd=1.6.0-r1"
   ],
   "schema_version": 1,
   "trusted_keys": [

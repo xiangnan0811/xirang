@@ -50,7 +50,7 @@ export function buildDemoNode(input: NewNodeInput, nodes: NodeRecord[], keyId: s
     username: input.username,
     authType: input.authType,
     keyId,
-    basePath: input.basePath || "/",
+    basePath: input.basePath ?? "/",
     status: "offline",
     tags: parseTags(input.tags),
     lastSeenAt: "",

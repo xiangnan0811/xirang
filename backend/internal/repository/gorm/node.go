@@ -2,11 +2,18 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"sort"
+	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/nodeprobe"
+	"xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
 )
 
@@ -60,12 +67,142 @@ func (r *NodeRepository) List(ctx context.Context) ([]model.Node, error) {
 
 // Create inserts a new node.
 func (r *NodeRepository) Create(ctx context.Context, node *model.Node) error {
-	return apperr.WrapDBError(r.db.WithContext(ctx).Create(node).Error)
+	return r.withPinnedSSHKey(ctx, node, false, nil, func(tx *gorm.DB, _ *model.Node) error {
+		return tx.Create(node).Error
+	})
 }
 
-// Update saves changes to an existing node.
-func (r *NodeRepository) Update(ctx context.Context, node *model.Node) error {
-	return apperr.WrapDBError(r.db.WithContext(ctx).Save(node).Error)
+// withPinnedSSHKey locks the node before the selected key, and reads the
+// trigger-updated response while those locks still protect the transaction.
+func (r *NodeRepository) withPinnedSSHKey(ctx context.Context, node *model.Node, update bool, prepare func(*model.Node) error, write func(*gorm.DB, *model.Node) error) error {
+	var options *sql.TxOptions
+	if r.db.Name() == "postgres" {
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch tx.Name() {
+		case "postgres":
+			if err := tx.Exec("LOCK TABLE nodes IN ROW EXCLUSIVE MODE").Error; err != nil {
+				return err
+			}
+		case "sqlite":
+			if err := tx.Exec("UPDATE nodes SET id = id WHERE 1 = 0").Error; err != nil {
+				return err
+			}
+		}
+		var existing model.Node
+		if update {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, node.ID).Error; err != nil {
+				return err
+			}
+		}
+		if prepare != nil {
+			if err := prepare(&existing); err != nil {
+				return err
+			}
+		}
+		if node.SSHKeyID != nil && *node.SSHKeyID > 0 {
+			var key model.SSHKey
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Select("id").First(&key, *node.SSHKeyID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return repository.ErrNodeSSHKeyNotFound
+				}
+				return err
+			}
+		}
+		if err := write(tx, &existing); err != nil {
+			return err
+		}
+		var saved model.Node
+		if err := tx.Preload("SSHKey").First(&saved, node.ID).Error; err != nil {
+			return err
+		}
+		// Migrated databases always populate the revision. AutoMigrate-only
+		// fixtures do not have the probe state table or revision triggers.
+		if update && saved.ConfigRevision != "" {
+			nodes := []model.Node{saved}
+			if _, err := nodeprobe.LoadEvidence(tx, nodes); err != nil {
+				return err
+			}
+			saved = nodes[0]
+		}
+		*node = saved
+		return nil
+	}, options)
+	return apperr.WrapDBError(err)
+}
+
+// Update writes configuration fields without overwriting probe or backup results.
+func (r *NodeRepository) Update(ctx context.Context, node *model.Node, options repository.NodeUpdateOptions) error {
+	fields := []string{"Name", "Host", "Port", "Username", "AuthType", "SSHKeyID", "Tags", "BackupDir", "UseSudo", "Archived", "EscalationPolicyID", "UpdatedAt"}
+	if options.UpdateStatus {
+		fields = append(fields, "Status")
+	}
+	if options.UpdateBasePath {
+		fields = append(fields, "BasePath")
+	}
+	prepare := func(existing *model.Node) error {
+		if options.ExpectedRevision != nil && *options.ExpectedRevision != existing.ConfigRevision {
+			return repository.ErrNodeRevisionConflict
+		}
+		start, end, expiry := captureNodeTime(existing.MaintenanceStart), captureNodeTime(existing.MaintenanceEnd), captureNodeTime(existing.ExpiryDate)
+		password, privateKey := existing.Password, existing.PrivateKey
+		if options.Merge != nil {
+			if err := options.Merge(existing); err != nil {
+				return err
+			}
+			*node = *existing
+		}
+		if options.ApplyTimes != nil {
+			if err := options.ApplyTimes(existing); err != nil {
+				return err
+			}
+			node.MaintenanceStart, node.MaintenanceEnd, node.ExpiryDate = existing.MaintenanceStart, existing.MaintenanceEnd, existing.ExpiryDate
+		}
+		if start.changed(existing.MaintenanceStart) {
+			fields = append(fields, "MaintenanceStart")
+		}
+		if end.changed(existing.MaintenanceEnd) {
+			fields = append(fields, "MaintenanceEnd")
+		}
+		if expiry.changed(existing.ExpiryDate) {
+			fields = append(fields, "ExpiryDate")
+		}
+		if node.Password != password {
+			fields = append(fields, "Password")
+		}
+		if node.PrivateKey != privateKey {
+			fields = append(fields, "PrivateKey")
+		}
+		return nil
+	}
+	write := func(tx *gorm.DB, _ *model.Node) error {
+		result := tx.Model(node).Select(fields).Updates(node)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	return r.withPinnedSSHKey(ctx, node, true, prepare, write)
+}
+
+type nodeTimeSnapshot struct {
+	value time.Time
+	valid bool
+}
+
+func captureNodeTime(value *time.Time) nodeTimeSnapshot {
+	if value == nil {
+		return nodeTimeSnapshot{}
+	}
+	return nodeTimeSnapshot{value: *value, valid: true}
+}
+
+func (snapshot nodeTimeSnapshot) changed(value *time.Time) bool {
+	return snapshot.valid != (value != nil) || (snapshot.valid && !snapshot.value.Equal(*value))
 }
 
 // Delete removes a node by its primary key.
@@ -85,9 +222,22 @@ func (r *NodeRepository) ExistsByID(ctx context.Context, id uint) (bool, error) 
 // DeleteWithAssociations deletes a node and its associated PolicyNode, Task,
 // and Alert records in a single transaction.
 func (r *NodeRepository) DeleteWithAssociations(ctx context.Context, id uint) error {
+	var options *sql.TxOptions
+	if r.db.Name() == "postgres" {
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockNodeDeletionSpace(tx); err != nil {
+			return err
+		}
 		var node model.Node
-		if err := tx.First(&node, id).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&node, id).Error; err != nil {
+			return err
+		}
+		if err := checkNodeDrillTargets(tx, []uint{id}); err != nil {
+			return err
+		}
+		if err := lockNodeDeletionTasks(tx, []uint{id}); err != nil {
 			return err
 		}
 		if err := tx.Where("node_id = ?", id).Delete(&model.PolicyNode{}).Error; err != nil {
@@ -100,7 +250,42 @@ func (r *NodeRepository) DeleteWithAssociations(ctx context.Context, id uint) er
 			return err
 		}
 		return tx.Delete(&model.Node{}, id).Error
-	})
+	}, options)
+}
+
+// Lock ownership before nodes and fence rotation before taking node row locks.
+func lockNodeDeletionSpace(tx *gorm.DB) error {
+	if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+		return err
+	}
+	if tx.Name() == "postgres" {
+		return tx.Exec("LOCK TABLE nodes IN ROW EXCLUSIVE MODE").Error
+	}
+	return nil
+}
+
+// Batch retry locks tasks before nodes. Do not wait on its task rows while
+// holding nodes, or the two paths can deadlock.
+func lockNodeDeletionTasks(tx *gorm.DB, ids []uint) error {
+	if tx.Name() != "postgres" {
+		return nil
+	}
+	var tasks []model.Task
+	return tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}).
+		Select("id").Where("node_id IN ?", ids).Order("id").Find(&tasks).Error
+}
+
+// TriggerDrill and the drill scanner use drill_enabled independently of the
+// policy's enabled/template flags. Disabled drills may retain legacy targets.
+func checkNodeDrillTargets(tx *gorm.DB, ids []uint) error {
+	var count int64
+	if err := tx.Model(&model.Policy{}).Where("drill_enabled = ? AND drill_target_node_id IN ?", true, ids).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 0 {
+		return repository.ErrNodeDrillTargetInUse
+	}
+	return nil
 }
 
 // BatchDeleteWithAssociations deletes multiple nodes and their associated
@@ -109,10 +294,30 @@ func (r *NodeRepository) BatchDeleteWithAssociations(ctx context.Context, ids []
 	var deleted int64
 	var notFound []uint
 
+	var options *sql.TxOptions
+	if r.db.Name() == "postgres" {
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existingIDs []uint
-		if err := tx.Model(&model.Node{}).Where("id IN ?", ids).Pluck("id", &existingIDs).Error; err != nil {
+		if err := lockNodeDeletionSpace(tx); err != nil {
 			return err
+		}
+		ordered := append([]uint(nil), ids...)
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+		var existingIDs []uint
+		for i, id := range ordered {
+			if i > 0 && ordered[i-1] == id {
+				continue
+			}
+			var node model.Node
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&node, id).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			existingIDs = append(existingIDs, node.ID)
 		}
 
 		existSet := make(map[uint]struct{}, len(existingIDs))
@@ -127,6 +332,12 @@ func (r *NodeRepository) BatchDeleteWithAssociations(ctx context.Context, ids []
 
 		if len(existingIDs) == 0 {
 			return nil
+		}
+		if err := checkNodeDrillTargets(tx, existingIDs); err != nil {
+			return err
+		}
+		if err := lockNodeDeletionTasks(tx, existingIDs); err != nil {
+			return err
 		}
 
 		if err := tx.Where("node_id IN ?", existingIDs).Delete(&model.PolicyNode{}).Error; err != nil {
@@ -145,7 +356,7 @@ func (r *NodeRepository) BatchDeleteWithAssociations(ctx context.Context, ids []
 		}
 		deleted = result.RowsAffected
 		return nil
-	})
+	}, options)
 	if err != nil {
 		return 0, nil, err
 	}

@@ -89,6 +89,9 @@ func (runtime *Runtime) joinFeatureTransitionFailure(primary error, compensation
 		}
 		runtime.setSearchReady(false)
 		runtime.featureTransitionFenced.Store(true)
+		if runtime.admission != nil {
+			runtime.admission.StopAccepting()
+		}
 	}
 	return errors.Join(primary, fmt.Errorf("%w: %w", ErrFeatureTransitionCompensation, compensationErr))
 }

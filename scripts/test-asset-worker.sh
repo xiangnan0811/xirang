@@ -714,10 +714,10 @@ container_id=$("$DOCKER" create \
       ffmpeg=8.0.1-r1 \
       font-noto=2026.11.01-r0 \
       font-noto-cjk=0_git20220127-r1 \
-      libcrypto3=3.5.9-r0 \
-      libexpat=2.10.0-r0 \
+      libcrypto3=3.5.9-r1 \
+      libexpat=2.11.0-r0 \
       libreoffice=25.8.1.1-r5 \
-      libssl3=3.5.9-r0 \
+      libssl3=3.5.9-r1 \
       musl=1.2.5-r24 \
       musl-utils=1.2.5-r24 \
       poppler-utils=25.12.0-r0 \
@@ -729,7 +729,7 @@ container_id=$("$DOCKER" create \
       gzip=1.14-r3 \
       xz=5.8.4-r0 \
       zlib=1.4-r0 \
-      zstd=1.5.7-r2; do
+      zstd=1.6.0-r1; do
       apk info -e "$package" >/dev/null
     done
     for executable in \

@@ -156,6 +156,7 @@ type targetRootMutationReceipt struct {
 // exported, formatted, or serialized.
 type TargetRootMutationRollback struct {
 	owner         *TargetRootAuthorityService
+	nodeID        uint
 	key           string
 	before        targetRootPersistedMutationState
 	after         targetRootPersistedMutationState
@@ -468,7 +469,7 @@ func (service *TargetRootAuthorityService) registerMutation(
 		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
 	}
 	return result, TargetRootMutationRollback{
-		owner: service, key: key, before: before, after: after,
+		owner: service, nodeID: request.NodeID, key: key, before: before, after: after,
 		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
 	}, nil
 }
@@ -539,7 +540,7 @@ func (service *TargetRootAuthorityService) DeleteMutation(
 		return TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
 	}
 	return TargetRootMutationRollback{
-		owner: service, key: key, before: before,
+		owner: service, nodeID: nodeID, key: key, before: before,
 		after: targetRootPersistedMutationState{},
 	}, nil
 }
@@ -639,7 +640,7 @@ func (service *TargetRootAuthorityService) DeleteAuthorizedMutation(
 		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
 	}
 	return result, TargetRootMutationRollback{
-		owner: service, key: key, before: before, after: after,
+		owner: service, nodeID: request.NodeID, key: key, before: before, after: after,
 		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
 	}, nil
 }
@@ -656,21 +657,28 @@ func (service *TargetRootAuthorityService) RestoreMutation(
 	if rollback.noOp {
 		return nil
 	}
-	if rollback.key == "" {
+	if rollback.nodeID == 0 || rollback.key == "" {
 		return ErrRecoveryTargetUnavailable
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if rollback.receiptKey != "" {
-			if restoreErr := restoreTargetRootPersistedMutationStateTx(
-				ctx, tx, rollback.receiptKey, rollback.receiptBefore, rollback.receiptAfter,
-			); restoreErr != nil {
-				return restoreErr
-			}
+		// Lock an existing Node even when the root is absent. If the Node was
+		// deleted, the exact settings comparisons still govern restoration.
+		if lockErr := lockRecoveryTargetRootAuthorityNode(ctx, tx, rollback.nodeID); lockErr != nil &&
+			!errors.Is(lockErr, settings.ErrRecoveryTargetRootNotFound) {
+			return lockErr
 		}
-		return restoreTargetRootPersistedMutationStateTx(ctx, tx, rollback.key, rollback.before, rollback.after)
+		if restoreErr := restoreTargetRootPersistedMutationStateTx(ctx, tx, rollback.key, rollback.before, rollback.after); restoreErr != nil {
+			return restoreErr
+		}
+		if rollback.receiptKey == "" {
+			return nil
+		}
+		return restoreTargetRootPersistedMutationStateTx(
+			ctx, tx, rollback.receiptKey, rollback.receiptBefore, rollback.receiptAfter,
+		)
 	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -1379,21 +1387,21 @@ func (service *PlanService) CreatePlanTx(ctx context.Context, tx *gorm.DB, reque
 
 	savepoint := fmt.Sprintf("recovery_plan_create_%d", planSavepointSequence.Add(1))
 	if err := tx.WithContext(ctx).Exec("SAVEPOINT " + savepoint).Error; err != nil {
-		return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+		return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 	}
 	result, createErr := service.createPlanTx(ctx, tx, normalized, now)
 	if createErr != nil {
 		rollbackTx := tx.WithContext(context.WithoutCancel(ctx))
 		if err := rollbackTx.Exec("ROLLBACK TO SAVEPOINT " + savepoint).Error; err != nil {
-			return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+			return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 		}
 		if err := rollbackTx.Exec("RELEASE SAVEPOINT " + savepoint).Error; err != nil {
-			return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+			return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 		}
 		return CreatePlanResult{}, publicPlanCreateError(ctx, createErr)
 	}
 	if err := tx.WithContext(ctx).Exec("RELEASE SAVEPOINT " + savepoint).Error; err != nil {
-		return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+		return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 	}
 	return result, nil
 }
@@ -1411,6 +1419,20 @@ func (service *PlanService) createPlanTx(
 	}
 	if found {
 		return planCreateResultFromReplay(request, replay)
+	}
+	if err := lockRecoveryAuthorityRepositoryTx(ctx, tx, request.Selection.RepositoryID); err != nil {
+		return CreatePlanResult{}, err
+	}
+	replay, found, err = loadPlanReplayTx(ctx, tx, request.RequesterID, request.Endpoint, keyDigest)
+	if err != nil {
+		return CreatePlanResult{}, err
+	}
+	if found {
+		return planCreateResultFromReplay(request, replay)
+	}
+	lockedAt := service.now().UTC()
+	if lockedAt.IsZero() || lockedAt.Before(now) || !lockedAt.Before(request.Plan.PreflightExpiresAt.UTC()) {
+		return CreatePlanResult{}, ErrInvalidRecoveryPlan
 	}
 
 	source, err := loadValidatedSource(
@@ -1851,6 +1873,12 @@ func classifyPlanCreateError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
 	if errors.Is(err, errPlanIdempotencyRace) || errors.Is(err, errPlanDatabaseBusy) ||
 		errors.Is(err, ErrInvalidRecoveryPlan) || errors.Is(err, ErrExactSelectionLimit) || errors.Is(err, ErrPlanIdempotencyConflict) ||
 		errors.Is(err, ErrRecoverySourceUnavailable) || errors.Is(err, ErrRecoverySourceChanged) ||
@@ -1871,6 +1899,12 @@ func publicPlanCreateError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
 	switch {
 	case isPlanCreateFault(err):
 		return err
@@ -1889,6 +1923,10 @@ func isPlanCreateFault(err error) bool {
 }
 
 func isPlanDuplicateKey(err error) bool {
+	var lockErr *recoveryAuthorityRepositoryLockError
+	if errors.As(err, &lockErr) {
+		err = lockErr.cause
+	}
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		return true
 	}
@@ -1898,6 +1936,10 @@ func isPlanDuplicateKey(err error) bool {
 }
 
 func isPlanDatabaseBusy(err error) bool {
+	var lockErr *recoveryAuthorityRepositoryLockError
+	if errors.As(err, &lockErr) {
+		err = lockErr.cause
+	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked") ||
 		strings.Contains(message, "database schema is locked") || strings.Contains(message, "deadlock detected") ||
@@ -3148,6 +3190,15 @@ func (service *AuthorizationService) Authorize(
 			service.writeAuthorizationAudit(ctx, normalized.request, result)
 			return result, nil
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return RecoveryAuthorizationResult{}, ctxErr
+		}
+		if errors.Is(authorizeErr, context.Canceled) {
+			return RecoveryAuthorizationResult{}, context.Canceled
+		}
+		if errors.Is(authorizeErr, context.DeadlineExceeded) {
+			return RecoveryAuthorizationResult{}, context.DeadlineExceeded
+		}
 		if replay, found, replayErr := service.loadAuthorizationReplay(ctx, normalized); found || replayErr != nil {
 			return replay, replayErr
 		}
@@ -3198,7 +3249,8 @@ func (service *AuthorizationService) authorizeOnce(
 		if used {
 			return ErrAuthorizationProofUsed
 		}
-		result, err = service.persistAuthorizationTx(ctx, tx, normalized, preparedExecute, authority)
+		checkedAt := startedAt
+		result, err = service.persistAuthorizationTx(ctx, tx, normalized, preparedExecute, authority, &checkedAt)
 		if err != nil {
 			return err
 		}
@@ -3207,8 +3259,12 @@ func (service *AuthorizationService) authorizeOnce(
 				return &authorizationFaultError{cause: err}
 			}
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		finishedAt := service.now().UTC()
-		if finishedAt.IsZero() || finishedAt.Before(startedAt) ||
+		if finishedAt.Before(checkedAt) || !validFreshAuthorizationAt(normalized, finishedAt) ||
+			(result.GrantExpiresAt != nil && !finishedAt.Before(result.GrantExpiresAt.UTC())) ||
 			(!authority.observation.expiresAt.IsZero() && !finishedAt.Before(authority.observation.expiresAt)) ||
 			!finishedAt.Before(authority.expiresAt) {
 			return ErrAuthorizationDenied
@@ -3285,6 +3341,15 @@ func (service *AuthorizationService) observeAuthorizationAuthority(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return observedAuthorizationAuthority{}, ctxErr
 		}
+		if errors.Is(err, context.Canceled) {
+			return observedAuthorizationAuthority{}, context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return observedAuthorizationAuthority{}, context.DeadlineExceeded
+		}
+		if errors.Is(err, errRecoveryAuthorityRepositoryLock) {
+			return observedAuthorizationAuthority{}, ErrAuthorizationUnavailable
+		}
 		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
 	}
 	finishedAt := service.now().UTC()
@@ -3316,7 +3381,8 @@ func isAuthorizationPublicError(err error) bool {
 		errors.Is(err, ErrAuthorizationProofUsed) ||
 		errors.Is(err, ErrAuthorizationSessionMismatch) ||
 		errors.Is(err, ErrAuthorizationProofLifetime) ||
-		errors.Is(err, ErrAuthorizationDenied)
+		errors.Is(err, ErrAuthorizationDenied) ||
+		errors.Is(err, ErrAuthorizationUnavailable)
 }
 
 func isAuthorizationRetryable(err error) bool {
@@ -3534,6 +3600,14 @@ func validAuthorizationProof(proof RecoveryAuthorizationProof, requesterID uint,
 	return proof.JTI != "" && len(proof.JTI) <= 256 && proof.Action == "asset.recover" &&
 		proof.UserID == requesterID && proof.Role == "admin" && proof.TokenVersion > 0 &&
 		now.Before(proof.ExpiresAt.UTC())
+}
+
+func validFreshAuthorizationAt(normalized normalizedRecoveryAuthorization, now time.Time) bool {
+	request := normalized.request
+	return !now.IsZero() && validAuthorizationSession(request.Session, request.RequesterID, now) &&
+		validAuthorizationProof(request.Proof, request.RequesterID, now) &&
+		now.Before(normalized.replayExpiresAt) &&
+		(normalized.grantExpiresAt.IsZero() || now.Before(normalized.grantExpiresAt))
 }
 
 func validAuthorizationGrantSecret(value string) bool {
@@ -4018,8 +4092,8 @@ func (service *AuthorizationService) persistAuthorizationTx(
 	normalized normalizedRecoveryAuthorization,
 	preparedExecute *preparedExecuteAggregate,
 	authority observedAuthorizationAuthority,
+	checkedAt *time.Time,
 ) (RecoveryAuthorizationResult, error) {
-	now := service.now().UTC()
 	var plan model.BackupAssetRecoveryPlan
 	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 		Where("id = ?", normalized.request.PlanID).Limit(1).Find(&plan)
@@ -4033,6 +4107,17 @@ func (service *AuthorizationService) persistAuthorizationTx(
 	if err := service.refreshAuthorizationIntentTx(ctx, tx, &normalized); err != nil {
 		return RecoveryAuthorizationResult{}, err
 	}
+	if err := lockRecoveryAuthorityRepositoryTx(ctx, tx, plan.RepositoryID); err != nil {
+		return RecoveryAuthorizationResult{}, err
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return RecoveryAuthorizationResult{}, ctxErr
+	}
+	now := service.now().UTC()
+	if now.Before(*checkedAt) || !validFreshAuthorizationAt(normalized, now) {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	*checkedAt = now
 
 	var result RecoveryAuthorizationResult
 	var err error
@@ -4060,7 +4145,16 @@ func (service *AuthorizationService) persistAuthorizationTx(
 		normalized.request.Category, "", false, &result); err != nil {
 		return RecoveryAuthorizationResult{}, err
 	}
-	receipt := authorizationReceiptRow(normalized, result, receiptID, now)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return RecoveryAuthorizationResult{}, ctxErr
+	}
+	receiptAt := service.now().UTC()
+	if receiptAt.Before(*checkedAt) || !validFreshAuthorizationAt(normalized, receiptAt) ||
+		(result.GrantExpiresAt != nil && !receiptAt.Before(result.GrantExpiresAt.UTC())) {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	*checkedAt = receiptAt
+	receipt := authorizationReceiptRow(normalized, result, receiptID, receiptAt)
 	receipt.GrantBindingDigest = result.GrantBindingDigest
 	if err := tx.WithContext(ctx).Create(&receipt).Error; err != nil {
 		return RecoveryAuthorizationResult{}, err
@@ -5755,7 +5849,14 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 	request ReconcileRecoveryRootRequest,
 ) (recoveryReconciliationExpectedSnapshot, error) {
 	var snapshot recoveryReconciliationExpectedSnapshot
+	// Keep the inventory on one snapshot while allowing the authority row locks.
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		revisions, err := service.revisions.ResolveRecoveryReconciliationRevisionsTx(
+			ctx, tx, request.NodeID, request.RootID,
+		)
+		if err != nil || !revisions.valid() {
+			return errRecoveryReconciliationIncomplete
+		}
 		root, err := service.roots.ResolveRecoveryTargetRootTx(
 			ctx, tx, request.NodeID, request.RootID,
 		)
@@ -5764,12 +5865,6 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 			return errRecoveryReconciliationIncomplete
 		}
 		snapshot.root = root
-		revisions, err := service.revisions.ResolveRecoveryReconciliationRevisionsTx(
-			ctx, tx, request.NodeID, request.RootID,
-		)
-		if err != nil || !revisions.valid() {
-			return errRecoveryReconciliationIncomplete
-		}
 		snapshot.session = recoveryTargetReconciliationSessionBinding{
 			nodeID: request.NodeID, nodeRevision: revisions.NodeRevision,
 			credentialRevision: revisions.CredentialRevision,
@@ -5875,7 +5970,7 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 		}
 		snapshot.candidates = candidates
 		return nil
-	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return recoveryReconciliationExpectedSnapshot{}, err
 	}

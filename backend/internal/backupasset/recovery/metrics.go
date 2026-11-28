@@ -128,7 +128,7 @@ func recoveryAuthorizationMetricOutcome(err error) MetricOutcome {
 	if err == nil {
 		return MetricOutcomeSuccess
 	}
-	if isAuthorizationPublicError(err) {
+	if isAuthorizationPublicError(err) && !errors.Is(err, ErrAuthorizationUnavailable) {
 		return MetricOutcomeBlocked
 	}
 	return MetricOutcomeFailure

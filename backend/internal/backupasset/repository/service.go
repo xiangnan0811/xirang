@@ -310,6 +310,9 @@ func (service *Service) ResolveLifecycleDeletePoint(
 // ResolveLifecycleDeletePointTx reconstructs the exact provider deletion
 // request using only the caller-owned transaction. Every runtime, binding,
 // and lineage lookup made by lifecycle deletion must use this entry point.
+// For PostgreSQL Rsync deletion, the caller must hold the exact repository's
+// recovery authority transaction lock before acquiring shared row locks; the
+// resolver locks producing Task and Node rows while reconstructing access.
 func (service *Service) ResolveLifecycleDeletePointTx(
 	ctx context.Context,
 	tx *gorm.DB,

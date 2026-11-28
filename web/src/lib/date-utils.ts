@@ -24,6 +24,46 @@ export function formatTimeOnly(input?: string | null): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+const DATETIME_LOCAL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+// 把 RFC3339 时间转为 `<input type="datetime-local">` 的本地分钟值；缺失/非法 → ""。
+export function toDatetimeLocalValue(input?: string | null): string {
+  if (!input) return "";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 严格解析 datetime-local 值为本地时间。格式不符、日历越界或因夏令时跳变而
+// 不存在的本地时刻返回 null；重复时刻沿用 Date 的既有选择（较早的偏移）。
+export function parseDatetimeLocalValue(value: string): Date | null {
+  const match = DATETIME_LOCAL_PATTERN.exec(value.trim());
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1, 6).map(Number);
+  const second = match[6] ? Number(match[6]) : 0;
+  const parsed = new Date(year, month - 1, day, hour, minute, second, 0);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day ||
+    parsed.getHours() !== hour ||
+    parsed.getMinutes() !== minute ||
+    parsed.getSeconds() !== second
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+// 本地时区相对 UTC 的偏移，例如 "UTC+08:00"、"UTC-04:30"。
+export function formatUtcOffset(date: Date = new Date()): string {
+  const totalMinutes = -date.getTimezoneOffset();
+  const sign = totalMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(totalMinutes);
+  return `UTC${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+}
+
 // 任务运行时长的规范显示（无效/缺失 → "—"，合法 0ms 照常显示）。
 export function formatTaskDuration(durationMs?: number): string {
   if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {

@@ -116,11 +116,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "zstd-libs-1.5.7-r2.apk",
+      "file": "zstd-libs-1.6.0-r1.apk",
       "name": "zstd-libs",
-      "sha256": "23c6065b0049b2406441564bcf0032515a43f78e80d76fcb85535a3803ef5d4e",
-      "size": 376646,
-      "version": "1.5.7-r2"
+      "sha256": "69243fd7b0633f20fee47ccf566ecfe2802a7a9d18700f10abc54aa8060774ab",
+      "size": 347838,
+      "version": "1.6.0-r1"
     }
   ],
   "base_source_digest": "sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586",
@@ -365,7 +365,7 @@
     {
       "arch": "x86_64",
       "name": "zstd-libs",
-      "version": "1.5.7-r2"
+      "version": "1.6.0-r1"
     }
   ],
   "installer_sha256": "3dd03b3e5dfd6be3fd09ae0ba9b091626aa7c7cf20e0c853607716a135e444f5",

@@ -88,17 +88,23 @@ func (r *hookableReaderAt) ReadAt(p []byte, off int64) (int, error) {
 //   - Fileread 支持注入 onReadComplete 钩子，用于在 io.ReadFull 读入缓冲区后、handle.Close()
 //     触发最后一次 postCheck 前确定性模拟远端文件被篡改或替换为越界软链接。
 type controlledSFTPFSHost struct {
-	mu             sync.Mutex
-	onBeforeOpen   map[string]func()
-	onAfterOpen    map[string]func()
-	onReadComplete map[string]func()
+	mu               sync.Mutex
+	onBeforeOpen     map[string]func()
+	onAfterOpen      map[string]func()
+	onReadComplete   map[string]func()
+	denyList         map[string]bool
+	realPathOverride map[string]string
+	onList           map[string]func()
 }
 
 func newControlledSFTPFSHost() *controlledSFTPFSHost {
 	return &controlledSFTPFSHost{
-		onBeforeOpen:   make(map[string]func()),
-		onAfterOpen:    make(map[string]func()),
-		onReadComplete: make(map[string]func()),
+		onBeforeOpen:     make(map[string]func()),
+		onAfterOpen:      make(map[string]func()),
+		onReadComplete:   make(map[string]func()),
+		denyList:         make(map[string]bool),
+		realPathOverride: make(map[string]string),
+		onList:           make(map[string]func()),
 	}
 }
 
@@ -133,6 +139,12 @@ func (h *controlledSFTPFSHost) setOnReadComplete(targetPath string, fn func()) {
 }
 
 func (h *controlledSFTPFSHost) RealPath(p string) (string, error) {
+	h.mu.Lock()
+	override, ok := h.realPathOverride[filepath.Clean(p)]
+	h.mu.Unlock()
+	if ok {
+		return override, nil
+	}
 	return filepath.EvalSymlinks(p)
 }
 
@@ -147,6 +159,16 @@ func (h *controlledSFTPFSHost) Lstat(req *sftp.Request) (sftp.ListerAt, error) {
 func (h *controlledSFTPFSHost) Filelist(req *sftp.Request) (sftp.ListerAt, error) {
 	switch req.Method {
 	case "List":
+		h.mu.Lock()
+		denied := h.denyList[filepath.Clean(req.Filepath)]
+		onList := h.onList[filepath.Clean(req.Filepath)]
+		h.mu.Unlock()
+		if onList != nil {
+			onList()
+		}
+		if denied {
+			return nil, sftp.ErrSSHFxPermissionDenied
+		}
 		entries, err := os.ReadDir(req.Filepath)
 		if err != nil {
 			return nil, err
@@ -503,6 +525,334 @@ type fileContentEnvelope struct {
 	Data    FileContentResponse `json:"data"`
 }
 
+func TestNodeFileBrowserHTTP_InitialDirectorySelection(t *testing.T) {
+	t.Setenv("FILE_BROWSER_ALLOW_ALL", "")
+	t.Setenv("APP_ENV", "production")
+	server := startFileBrowserSSHSFTPTestServer(t)
+	db := newValidateTestDB(t)
+	router := newFileBrowserTestRouter(db)
+	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
+	tmp := t.TempDir()
+	base := filepath.Join(tmp, "base")
+	denied := filepath.Join(tmp, "a-denied")
+	first := filepath.Join(tmp, "b-first")
+	second := filepath.Join(tmp, "c-second")
+	empty := filepath.Join(tmp, "empty")
+	for _, dir := range []string{base, denied, first, second, empty} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(first, "selected.txt"), []byte("selected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(base, alias); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(tmp, "missing-secret-root")
+	regular := filepath.Join(tmp, "a0-not-directory")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server.fsHost.mu.Lock()
+	server.fsHost.denyList[denied] = true
+	server.fsHost.mu.Unlock()
+	preferredNode := seedFileBrowserTestNode(t, db, server, "initial-preferred", " \t"+alias+"//./ \u00a0")
+	taskNode := seedFileBrowserTestNode(t, db, server, "initial-task", "")
+	fallbackNode := seedFileBrowserTestNode(t, db, server, "initial-fallback", missing)
+	emptyNode := seedFileBrowserTestNode(t, db, server, "initial-empty", empty)
+	missingNode := seedFileBrowserTestNode(t, db, server, "initial-missing", missing)
+	deniedNode := seedFileBrowserTestNode(t, db, server, "initial-denied", denied)
+	rootNode := seedFileBrowserTestNode(t, db, server, "initial-root", "/")
+	noRootNode := seedFileBrowserTestNode(t, db, server, "initial-none", "")
+	archived := time.Now().UTC()
+	for _, task := range []model.Task{
+		{Name: "preferred-other", NodeID: preferredNode.ID, RsyncSource: first},
+		{Name: "task-second", NodeID: taskNode.ID, RsyncSource: second},
+		{Name: "task-first-archived", NodeID: taskNode.ID, RsyncSource: first, ArchivedAt: &archived},
+		{Name: "fallback-second", NodeID: fallbackNode.ID, RsyncSource: second},
+		{Name: "fallback-first", NodeID: fallbackNode.ID, RsyncSource: first},
+		{Name: "fallback-file", NodeID: fallbackNode.ID, RsyncSource: regular},
+		{Name: "fallback-denied", NodeID: fallbackNode.ID, RsyncSource: denied},
+		{Name: "denied-missing", NodeID: deniedNode.ID, RsyncSource: missing},
+	} {
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.Task{}).Where("node_id = ? AND rsync_source = ?", taskNode.ID, first).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := func(node model.Node, query string, actor fileBrowserActor, wantStatus int, wantPath, wantOutcome, wantStage string) {
+		t.Helper()
+		beforeAuth, beforeSessions := server.authAttempts.Load(), server.sftpSessions.Load()
+		var beforeEvents int64
+		if err := db.Model(&model.CredentialAuditEvent{}).Count(&beforeEvents).Error; err != nil {
+			t.Fatal(err)
+		}
+		target := fmt.Sprintf("/api/v1/nodes/%d/files%s", node.ID, query)
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("X-Test-User-ID", strconv.FormatUint(uint64(actor.userID), 10))
+		req.Header.Set("X-Test-Username", actor.username)
+		req.Header.Set("X-Test-Role", actor.role)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != wantStatus {
+			t.Fatalf("%s status=%d want=%d body=%s", target, resp.Code, wantStatus, resp.Body.String())
+		}
+		if wantStatus == http.StatusOK {
+			var envelope fileListEnvelope
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Data.Path != wantPath || (wantPath == empty && len(envelope.Data.Entries) != 0) {
+				t.Fatalf("unexpected initial listing: %+v", envelope.Data)
+			}
+			if wantPath == first && (len(envelope.Data.Entries) != 1 || envelope.Data.Entries[0].Path != filepath.Join(first, "selected.txt")) {
+				t.Fatalf("unexpected selected root entries: %+v", envelope.Data.Entries)
+			}
+		} else if strings.Contains(resp.Body.String(), missing) || strings.Contains(resp.Body.String(), denied) {
+			t.Fatalf("rejected candidate leaked: %s", resp.Body.String())
+		}
+		var events []model.CredentialAuditEvent
+		if err := db.Order("id").Find(&events).Error; err != nil {
+			t.Fatal(err)
+		}
+		if wantOutcome == "" {
+			if int64(len(events)) != beforeEvents || server.authAttempts.Load() != beforeAuth || server.sftpSessions.Load() != beforeSessions {
+				t.Fatal("middleware denial reached SSH or audit")
+			}
+			return
+		}
+		if int64(len(events)) != beforeEvents+1 || server.authAttempts.Load() != beforeAuth+1 || server.sftpSessions.Load() != beforeSessions+1 {
+			t.Fatalf("initial request must use one audit and one SSH/SFTP session: events=%d auth=%d sessions=%d", len(events)-int(beforeEvents), server.authAttempts.Load()-beforeAuth, server.sftpSessions.Load()-beforeSessions)
+		}
+		event := events[len(events)-1]
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+			t.Fatal(err)
+		}
+		hashPath := "initial"
+		if wantStatus == http.StatusOK {
+			hashPath = wantPath
+		}
+		if event.Action != "file_browser.list" || event.Outcome != wantOutcome || metadata["stage"] != wantStage || metadata["path_hash"] != safePathHash(hashPath) || strings.Contains(event.Metadata, tmp) {
+			t.Fatalf("unexpected initial audit: %+v metadata=%s", event, event.Metadata)
+		}
+	}
+	request(preferredNode, "?initial=1", admin, http.StatusOK, base, credentialaudit.OutcomeSuccess, "success")
+	request(taskNode, "?initial=1", admin, http.StatusOK, first, credentialaudit.OutcomeSuccess, "success")
+	request(fallbackNode, "?initial=1", admin, http.StatusOK, first, credentialaudit.OutcomeSuccess, "success")
+	request(emptyNode, "?initial=1", admin, http.StatusOK, empty, credentialaudit.OutcomeSuccess, "success")
+	request(rootNode, "?initial=1", admin, http.StatusOK, "/", credentialaudit.OutcomeSuccess, "success")
+	request(missingNode, "?initial=1", admin, http.StatusForbidden, "", credentialaudit.OutcomeBlocked, "path_validate")
+	request(noRootNode, "?initial=1", admin, http.StatusForbidden, "", credentialaudit.OutcomeBlocked, "path_validate")
+	request(deniedNode, "?initial=1", admin, http.StatusBadGateway, "", credentialaudit.OutcomeFailure, "read_dir")
+	request(taskNode, "?initial=1", fileBrowserActor{userID: 9, username: "viewer", role: "viewer"}, http.StatusForbidden, "", "", "")
+	request(taskNode, "?initial=1", fileBrowserActor{userID: 10, username: "other", role: "operator"}, http.StatusForbidden, "", "", "")
+
+	t.Run("legacy_query_precedence", func(t *testing.T) {
+		for _, query := range []string{"", "?initial=0", "?initial=1&path=", "?initial=1&path=%20", "?initial=1&path=%2F"} {
+			resp := performNodeFileBrowserRequest(t, router, admin, "files"+query, preferredNode.ID, "<omit>")
+			if resp.Code != http.StatusForbidden {
+				t.Fatalf("query %q status=%d body=%s", query, resp.Code, resp.Body.String())
+			}
+		}
+		resp := performNodeFileBrowserRequest(t, router, admin, "files?initial=1&path="+url.QueryEscape(second), taskNode.ID, "<omit>")
+		if resp.Code != http.StatusOK {
+			t.Fatalf("explicit path status=%d body=%s", resp.Code, resp.Body.String())
+		}
+		var envelope fileListEnvelope
+		if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil || envelope.Data.Path != second {
+			t.Fatalf("explicit path did not take precedence: %+v err=%v", envelope.Data, err)
+		}
+		for _, query := range []string{"", "?initial=0", "?initial=1&path=", "?initial=1&path=%2F"} {
+			resp := performNodeFileBrowserRequest(t, router, admin, "files"+query, rootNode.ID, "<omit>")
+			if resp.Code != http.StatusOK {
+				t.Fatalf("root query %q status=%d body=%s", query, resp.Code, resp.Body.String())
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil || envelope.Data.Path != "/" {
+				t.Fatalf("root query %q returned %+v err=%v", query, envelope.Data, err)
+			}
+		}
+	})
+	t.Run("development_override", func(t *testing.T) {
+		t.Setenv("FILE_BROWSER_ALLOW_ALL", "true")
+		t.Setenv("APP_ENV", "development")
+		request(preferredNode, "?initial=1", admin, http.StatusOK, base, credentialaudit.OutcomeSuccess, "success")
+		request(noRootNode, "?initial=1", admin, http.StatusOK, "/", credentialaudit.OutcomeSuccess, "success")
+	})
+	t.Run("production_override_blocked", func(t *testing.T) {
+		t.Setenv("FILE_BROWSER_ALLOW_ALL", "true")
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("ENVIRONMENT", "")
+		t.Setenv("GIN_MODE", "release")
+		request(preferredNode, "?initial=1", admin, http.StatusForbidden, "", credentialaudit.OutcomeBlocked, "path_validate")
+	})
+}
+
+func TestNodeFileBrowserHTTP_InitialLookupFailureDoesNotReportMissingNode(t *testing.T) {
+	db := newValidateTestDB(t)
+	node := model.Node{Name: "initial-existing", Host: "127.0.0.1", Port: 22, Username: "test"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := newFileBrowserTestRouter(db)
+	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
+	missing := performNodeFileBrowserRequest(t, router, admin, "files?initial=1", node.ID+1, "<omit>")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing node: status=%d body=%s", missing.Code, missing.Body.String())
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	path := fmt.Sprintf("/api/v1/nodes/%d/files?initial=1", node.ID)
+	req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+	req.Header.Set("X-Test-Role", "admin")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("expired initial request: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestNodeFileBrowserHTTP_InitialNormalizedMissingRootFallsBack(t *testing.T) {
+	t.Setenv("FILE_BROWSER_ALLOW_ALL", "")
+	server := startFileBrowserSSHSFTPTestServer(t)
+	db := newValidateTestDB(t)
+	router := newFileBrowserTestRouter(db)
+	tmp := t.TempDir()
+	missing := filepath.Join(tmp, "missing")
+	fallback := filepath.Join(tmp, "fallback")
+	if err := os.Mkdir(fallback, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server.fsHost.mu.Lock()
+	server.fsHost.realPathOverride[missing] = missing
+	server.fsHost.mu.Unlock()
+	node := seedFileBrowserTestNode(t, db, server, "normalized-missing", missing)
+	if err := db.Create(&model.Task{Name: "fallback", NodeID: node.ID, RsyncSource: fallback}).Error; err != nil {
+		t.Fatal(err)
+	}
+	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
+	resp := performNodeFileBrowserRequest(t, router, admin, "files?initial=1", node.ID, "<omit>")
+	var envelope fileListEnvelope
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil || resp.Code != http.StatusOK || envelope.Data.Path != fallback {
+		t.Fatalf("normalized missing root: status=%d body=%s err=%v", resp.Code, resp.Body.String(), err)
+	}
+	if server.authAttempts.Load() != 1 || server.sftpSessions.Load() != 1 {
+		t.Fatalf("fallback opened additional sessions: auth=%d sftp=%d", server.authAttempts.Load(), server.sftpSessions.Load())
+	}
+}
+
+func TestNodeFileBrowserHTTP_InitialCancellationClosesBlockedSFTP(t *testing.T) {
+	t.Setenv("FILE_BROWSER_ALLOW_ALL", "")
+	server := startFileBrowserSSHSFTPTestServer(t)
+	db := newValidateTestDB(t)
+	router := newFileBrowserTestRouter(db)
+	root := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	server.fsHost.mu.Lock()
+	server.fsHost.onList[root] = func() {
+		close(entered)
+		<-release
+	}
+	server.fsHost.mu.Unlock()
+	node := seedFileBrowserTestNode(t, db, server, "cancel-blocked", root)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/nodes/%d/files?initial=1", node.ID), nil).WithContext(ctx)
+	req.Header.Set("X-Test-User-ID", "1")
+	req.Header.Set("X-Test-Username", "admin")
+	req.Header.Set("X-Test-Role", "admin")
+	resp := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		router.ServeHTTP(resp, req)
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SFTP listing did not reach barrier")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation did not unblock the SFTP request")
+	}
+	if resp.Code != http.StatusBadGateway || strings.Contains(resp.Body.String(), root) {
+		t.Fatalf("unexpected canceled response: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	releaseOnce.Do(func() { close(release) })
+}
+
+func TestNodeFileBrowserHTTP_ExactCanonicalWhitespaceNavigation(t *testing.T) {
+	t.Setenv("FILE_BROWSER_ALLOW_ALL", "")
+	server := startFileBrowserSSHSFTPTestServer(t)
+	db := newValidateTestDB(t)
+	router := newFileBrowserTestRouter(db)
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root ")
+	child := filepath.Join(root, "child ")
+	file := filepath.Join(child, "file ")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("canonical content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	node := seedFileBrowserTestNode(t, db, server, "whitespace-root", alias)
+	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
+	initial := performNodeFileBrowserRequest(t, router, admin, "files?initial=1&path_exact=1", node.ID, "<omit>")
+	var listing fileListEnvelope
+	if err := json.Unmarshal(initial.Body.Bytes(), &listing); err != nil || initial.Code != http.StatusOK || listing.Data.Path != root {
+		t.Fatalf("initial canonical root: status=%d body=%s err=%v", initial.Code, initial.Body.String(), err)
+	}
+	for _, path := range []string{root, child, root} {
+		resp := performNodeFileBrowserRequest(t, router, admin, "files?path_exact=1&path="+url.QueryEscape(path), node.ID, "<omit>")
+		if err := json.Unmarshal(resp.Body.Bytes(), &listing); err != nil || resp.Code != http.StatusOK || listing.Data.Path != path {
+			t.Fatalf("exact listing %q: status=%d body=%s err=%v", path, resp.Code, resp.Body.String(), err)
+		}
+	}
+	preview := performNodeFileBrowserRequest(t, router, admin, "files/content?path_exact=1&path="+url.QueryEscape(file), node.ID, "<omit>")
+	var content fileContentEnvelope
+	if err := json.Unmarshal(preview.Body.Bytes(), &content); err != nil || preview.Code != http.StatusOK || content.Data.Path != file || content.Data.Content != "canonical content" {
+		t.Fatalf("exact preview: status=%d body=%s err=%v", preview.Code, preview.Body.String(), err)
+	}
+	for _, endpoint := range []string{"files", "files/content"} {
+		resp := performNodeFileBrowserRequest(t, router, admin, endpoint+"?path_exact=1&path=relative", node.ID, "<omit>")
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("relative exact path on %s: status=%d body=%s", endpoint, resp.Code, resp.Body.String())
+		}
+		resp = performNodeFileBrowserRequest(t, router, admin, endpoint+"?path_exact=1&path="+url.QueryEscape(tmp), node.ID, "<omit>")
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("outside exact path on %s: status=%d body=%s", endpoint, resp.Code, resp.Body.String())
+		}
+	}
+	legacy := performNodeFileBrowserRequest(t, router, admin, "files?path="+url.QueryEscape(root), node.ID, "<omit>")
+	if legacy.Code != http.StatusForbidden {
+		t.Fatalf("legacy whitespace trimming changed: status=%d body=%s", legacy.Code, legacy.Body.String())
+	}
+	blankList := performNodeFileBrowserRequest(t, router, admin, "files?initial=1&path_exact=1&path=%20", node.ID, "<omit>")
+	if blankList.Code != http.StatusForbidden {
+		t.Fatalf("blank path must override initial: status=%d body=%s", blankList.Code, blankList.Body.String())
+	}
+	blank := performNodeFileBrowserRequest(t, router, admin, "files/content?path_exact=1&path=%20", node.ID, "<omit>")
+	if blank.Code != http.StatusBadRequest {
+		t.Fatalf("blank preview path: status=%d body=%s", blank.Code, blank.Body.String())
+	}
+}
+
 // setupSymlinkTree 构造如下结构（root 末尾不带 /）：
 //
 //	<root>/
@@ -578,7 +928,20 @@ func TestNodeFileBrowserHTTP_InRootPathsAndSafeSymlinksAllowed(t *testing.T) {
 	router := newFileBrowserTestRouter(db)
 	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
 
-	node := seedFileBrowserTestNode(t, db, server, "node-in-root", root)
+	node := seedFileBrowserTestNode(t, db, server, "node-in-root", root+"//./")
+	legacyNode := seedFileBrowserTestNode(t, db, server, "node-legacy-root", " \t"+root+"//./ \u00a0")
+	for _, candidate := range []model.Node{node, legacyNode} {
+		initial := performNodeFileBrowserRequest(t, router, admin, "files?initial=1", candidate.ID, "<omit>")
+		var listing fileListEnvelope
+		if initial.Code != http.StatusOK || json.Unmarshal(initial.Body.Bytes(), &listing) != nil || listing.Data.Path != root {
+			t.Fatalf("initial base %q: status=%d body=%s", candidate.BasePath, initial.Code, initial.Body.String())
+		}
+		preview := performNodeFileBrowserRequest(t, router, admin, "files/content", candidate.ID, filepath.Join(root, "file"))
+		var content fileContentEnvelope
+		if preview.Code != http.StatusOK || json.Unmarshal(preview.Body.Bytes(), &content) != nil || content.Data.Content != "hi" || content.Data.Path != filepath.Join(root, "file") {
+			t.Fatalf("preview base %q: status=%d body=%s", candidate.BasePath, preview.Code, preview.Body.String())
+		}
+	}
 
 	// 1) 列举根内子目录 sub
 	subResp := performNodeFileBrowserRequest(t, router, admin, "files", node.ID, filepath.Join(root, "sub"))

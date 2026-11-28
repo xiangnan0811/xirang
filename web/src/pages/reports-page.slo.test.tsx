@@ -55,10 +55,15 @@ vi.mock("@/lib/api/client", async () => {
       createSLO: vi.fn(),
       updateSLO: vi.fn(),
       deleteSLO: vi.fn(),
-      listEscalationPolicies: vi.fn().mockResolvedValue([]),
     },
   };
 });
+
+vi.mock("@/lib/api/escalation", () => ({
+  createEscalationApi: () => ({
+    listEscalationPolicies: vi.fn().mockResolvedValue([]),
+  }),
+}));
 
 describe("SLOPanel", () => {
   beforeEach(() => {

@@ -17,22 +17,41 @@ import type { FileEntry, FileListResult, FileContentResult } from "@/lib/api/fil
 type FileBrowserProps = {
   /** 加载目录内容 */
   fetchDir: (path: string, signal?: AbortSignal) => Promise<FileListResult>;
+  /**
+   * 可选：由服务端选择起始目录。提供时首次加载（以及首次成功前的重试/刷新）调用它而非
+   * fetchDir(rootPath)，并以响应中的规范路径作为本次挂载的面包屑根；之后一律用显式路径。
+   */
+  fetchInitialDir?: (signal?: AbortSignal) => Promise<FileListResult>;
   /** 加载文件内容（用于预览） */
   fetchContent: (path: string, signal?: AbortSignal) => Promise<FileContentResult>;
-  /** 根路径（默认 "/"） */
+  /** 固定根路径（默认 "/"）；提供 fetchInitialDir 时忽略 */
   rootPath?: string;
   className?: string;
 };
 
-function parseBreadcrumbs(path: string, rootPath: string, rootLabel: string): Array<{ label: string; path: string }> {
-  const root = rootPath || "/";
-  const relative = path.startsWith(root) ? path.slice(root.length) : path;
-  const segments = relative.split("/").filter(Boolean);
+type DirRequest = { kind: "initial" } | { kind: "path"; path: string };
 
-  const crumbs = [{ label: root === "/" ? rootLabel : root.split("/").pop() || root, path: root }];
-  let current = root.endsWith("/") ? root.slice(0, -1) : root;
-  for (const seg of segments) {
-    current = current ? `${current}/${seg}` : `/${seg}`;
+type Location = { root: string; path: string };
+
+/** Absolute, normalized POSIX path: no empty, "." or ".." components and no trailing slash. */
+function isCanonicalPath(path: unknown): path is string {
+  if (typeof path !== "string" || !path.startsWith("/") || path.includes("\0")) return false;
+  if (path === "/") return true;
+  return path.slice(1).split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
+function parseBreadcrumbs({ root, path }: Location, rootLabel: string): Array<{ label: string; path: string }> {
+  const crumbs = [{ label: root === "/" ? rootLabel : root.slice(root.lastIndexOf("/") + 1), path: root }];
+  if (path === root) return crumbs;
+  if (root !== "/" && !path.startsWith(`${root}/`)) {
+    // The server may authorize a canonical target outside this tab's root (e.g. a symlink into
+    // another configured root). Never manufacture ancestors for it; the root crumb is the reset.
+    crumbs.push({ label: path, path });
+    return crumbs;
+  }
+  let current = root === "/" ? "" : root;
+  for (const seg of path.slice(current.length + 1).split("/")) {
+    current = `${current}/${seg}`;
     crumbs.push({ label: seg, path: current });
   }
   return crumbs;
@@ -50,12 +69,18 @@ const formatModTime = formatTime;
 
 export function FileBrowser(props: FileBrowserProps) {
   const { i18n } = useTranslation();
-  return <FileBrowserContent key={`${props.rootPath ?? "/"}:${i18n.language}`} {...props} />;
+  const mode = props.fetchInitialDir ? "initial" : `root:${props.rootPath ?? "/"}`;
+  return <FileBrowserContent key={`${mode}:${i18n.language}`} {...props} />;
 }
 
-function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
+function FileBrowserContent({ fetchDir, fetchInitialDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
   const { t } = useTranslation();
-  const [currentPath, setCurrentPath] = useState<string>(rootPath);
+  // Mode is fixed per mount (the wrapper key changes with it).
+  const fixedRoot = fetchInitialDir ? null : rootPath.replace(/\/+$/, "") || "/";
+  // null until the initial listing succeeds; root then stays fixed for this mount.
+  const [location, setLocation] = useState<Location | null>(
+    fixedRoot === null ? null : { root: fixedRoot, path: fixedRoot },
+  );
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -63,24 +88,39 @@ function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className 
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const lastRequestRef = useRef<DirRequest | null>(null);
   const fetchDirRef = useRef(fetchDir);
+  const fetchInitialDirRef = useRef(fetchInitialDir);
 
   useEffect(() => {
     fetchDirRef.current = fetchDir;
-  }, [fetchDir]);
+    fetchInitialDirRef.current = fetchInitialDir;
+  }, [fetchDir, fetchInitialDir]);
 
   const loadDir = useCallback(
-    (path: string) => {
+    (req: DirRequest) => {
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      lastRequestRef.current = req;
 
-      fetchDirRef.current(path, ctrl.signal)
+      const pending = req.kind === "path"
+        ? fetchDirRef.current(req.path, ctrl.signal)
+        : fetchInitialDirRef.current?.(ctrl.signal) ?? Promise.reject(new Error(t('fileBrowser.loadDirFailed')));
+      pending
         .then((result) => {
           if (ctrl.signal.aborted) return;
+          if (!isCanonicalPath(result?.path) || !Array.isArray(result.entries)) {
+            setError(t('fileBrowser.loadDirFailed'));
+            setLoading(false);
+            return;
+          }
           setEntries(result.entries);
           setTruncated(result.truncated);
-          setCurrentPath(result.path);
+          // Only the initial listing may establish the root; explicit paths never widen it.
+          setLocation((prev) =>
+            req.kind === "initial" ? { root: result.path, path: result.path } : prev && { root: prev.root, path: result.path },
+          );
           setLoading(false);
         })
         .catch((err: unknown) => {
@@ -93,15 +133,17 @@ function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className 
   );
 
   useEffect(() => {
-    loadDir(rootPath);
+    loadDir(fixedRoot === null ? { kind: "initial" } : { kind: "path", path: fixedRoot });
     return () => abortRef.current?.abort();
-  }, [rootPath, loadDir]);
+  }, [fixedRoot, loadDir]);
 
-  const handleNavigate = (path: string) => {
+  const startLoad = (req: DirRequest) => {
     setLoading(true);
     setError(null);
-    loadDir(path);
+    loadDir(req);
   };
+
+  const handleNavigate = (path: string) => startLoad({ kind: "path", path });
 
   const handleEntryClick = (entry: FileEntry) => {
     if (entry.isDir) {
@@ -112,7 +154,7 @@ function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className 
     }
   };
 
-  const breadcrumbs = parseBreadcrumbs(currentPath, rootPath, t('fileBrowser.rootDir'));
+  const breadcrumbs = location ? parseBreadcrumbs(location, t('fileBrowser.rootDir')) : [];
   const parentPath = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2].path : null;
 
   // 目录优先，文件其次，各自按名称排序
@@ -143,18 +185,20 @@ function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className 
                 type="button"
                 className="truncate max-w-[160px] text-primary hover:underline"
                 onClick={() => handleNavigate(crumb.path)}
+                title={crumb.path}
               >
                 {crumb.label}
               </button>
             ) : (
-              <span className="truncate max-w-[200px] font-medium">{crumb.label}</span>
+              <span className="truncate max-w-[200px] font-medium" title={crumb.path}>{crumb.label}</span>
             )}
           </span>
         ))}
         <button
           type="button"
           className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          onClick={() => handleNavigate(currentPath)}
+          // Before the first successful listing only the initial request is meaningful.
+          onClick={() => startLoad(location === null ? { kind: "initial" } : { kind: "path", path: location.path })}
           aria-label={t('common.refresh')}
           disabled={loading}
         >
@@ -177,7 +221,7 @@ function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className 
           <button
             type="button"
             className="ml-auto text-xs underline"
-            onClick={() => loadDir(currentPath)}
+            onClick={() => { if (lastRequestRef.current) startLoad(lastRequestRef.current); }}
           >
             {t('common.retry')}
           </button>

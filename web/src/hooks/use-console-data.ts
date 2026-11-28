@@ -6,6 +6,7 @@ import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { formatTimeOnly, getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 import type { SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
+import type { NodesContextValue } from "@/context/nodes-context.shared";
 
 // mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
 const loadMocks = () => import("@/data/mock");
@@ -24,12 +25,10 @@ import type {
   IntegrationProbeResult,
   LogEvent,
   NewIntegrationInput,
-  NewNodeInput,
   NewPolicyInput,
   NewSSHKeyInput,
   NewTaskInput,
   UpdateTaskInput,
-  NodeConnectionProbeOutcome,
   NodeRecord,
   OverviewStats,
   OverviewSummary,
@@ -74,11 +73,11 @@ export interface ConsoleDataState {
   refreshSSHKeys: () => Promise<void>;
   refreshIntegrations: () => Promise<void>;
 
-  createNode: (input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>;
-  updateNode: (nodeId: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>;
+  createNode: NodesContextValue["createNode"];
+  updateNode: NodesContextValue["updateNode"];
   deleteNode: (nodeId: number, isCurrent?: () => boolean) => Promise<void>;
   deleteNodes: (nodeIds: number[], isCurrent?: () => boolean) => Promise<{ deleted: number; notFoundIds: number[] }>;
-  testNodeConnection: (nodeId: number) => Promise<NodeConnectionProbeOutcome>;
+  testNodeConnection: NodesContextValue["testNodeConnection"];
   triggerNodeBackup: (nodeId: number) => Promise<void>;
 
   createPolicy: (input: NewPolicyInput) => Promise<void>;

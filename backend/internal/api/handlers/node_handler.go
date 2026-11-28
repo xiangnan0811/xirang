@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -9,13 +10,15 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
-	"xirang/backend/internal/logger"
+	"xirang/backend/internal/database"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
+	"xirang/backend/internal/nodeprobe"
+	"xirang/backend/internal/repository"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -46,27 +49,36 @@ func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHa
 }
 
 type nodeRequest struct {
-	Name             string  `json:"name" binding:"required"`
-	Host             string  `json:"host" binding:"required"`
-	Port             int     `json:"port"`
-	Username         string  `json:"username" binding:"required"`
-	AuthType         string  `json:"auth_type"`
-	Password         string  `json:"password"`
-	PrivateKey       string  `json:"private_key"`
-	SSHKeyID         *uint   `json:"ssh_key_id"`
-	Tags             string  `json:"tags"`
-	Status           string  `json:"status"`
-	BasePath         string  `json:"base_path"`
+	Name       string `json:"name" binding:"required"`
+	Host       string `json:"host" binding:"required"`
+	Port       int    `json:"port"`
+	Username   string `json:"username" binding:"required"`
+	AuthType   string `json:"auth_type"`
+	Password   string `json:"password"`
+	PrivateKey string `json:"private_key"`
+	SSHKeyID   *uint  `json:"ssh_key_id"`
+	Tags       string `json:"tags"`
+	// BasePath is empty or an absolute POSIX path with no NUL, complete .. component, or leading/trailing Unicode whitespace. Create accepts empty as unset; update retains the existing value when omitted, null, empty, or repeated unchanged.
+	BasePath         string  `json:"base_path" extensions:"x-nullable"`
 	BackupDir        string  `json:"backup_dir"`
-	MaintenanceStart *string `json:"maintenance_start"`
-	MaintenanceEnd   *string `json:"maintenance_end"`
-	ExpiryDate       *string `json:"expiry_date"`
+	MaintenanceStart *string `json:"maintenance_start" extensions:"x-nullable"`
+	MaintenanceEnd   *string `json:"maintenance_end" extensions:"x-nullable"`
+	ExpiryDate       *string `json:"expiry_date" extensions:"x-nullable"`
 	Archived         *bool   `json:"archived"`
 	UseSudo          *bool   `json:"use_sudo"`
+	// Status accepts exactly online, warning, or offline. Other nonempty values return 400. Omitted, null, or empty values default to offline on create and preserve the stored status on update.
+	Status string `json:"status" extensions:"x-nullable"`
+	// ExpectedRevision is optional or null for legacy updates; a supplied value must be 32 lowercase hexadecimal characters.
+	ExpectedRevision *string `json:"expected_revision" extensions:"x-nullable"`
 }
 type nodeUpdateResponse struct {
 	Node    model.Node `json:"node"`
 	Warning string     `json:"warning,omitempty"`
+}
+
+type nodeGetResponse struct {
+	model.Node
+	ProbeToken string `json:"probe_token,omitempty"`
 }
 
 type nodeBatchDeleteRequest struct {
@@ -75,7 +87,7 @@ type nodeBatchDeleteRequest struct {
 
 // List godoc
 // @Summary      列出节点
-// @Description  返回所有节点列表，operator 仅返回自己负责的节点
+// @Description  返回所有节点列表，operator 仅返回自己负责的节点；connection_test 描述最近完成的探测及其是否适用于当前连接配置。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -84,39 +96,47 @@ type nodeBatchDeleteRequest struct {
 // @Failure      401               {object}  handlers.Response
 // @Router       /nodes [get]
 func (h *NodeHandler) List(c *gin.Context) {
-	query := h.db.Preload("SSHKey")
-	if c.Query("include_archived") != "true" {
-		query = query.Where("archived = ?", false)
-	}
-	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
+	nodes := make([]model.Node, 0)
+	err := database.WithReadonlySnapshot(c.Request.Context(), h.db, func(tx *gorm.DB) error {
+		query := tx.Omit("password", "private_key")
+		if c.Query("include_archived") != "true" {
+			query = query.Where("archived = ?", false)
+		}
+		switch middleware.CurrentRole(c) {
+		case "admin", "viewer":
+		case "operator":
+			owned := tx.Model(&model.NodeOwner{}).Select("node_id").Where("user_id = ?", middleware.CurrentUserID(c))
+			query = query.Where("id IN (?)", owned)
+		default:
+			return errUnknownRole
+		}
+		if err := query.Order("id asc").Find(&nodes).Error; err != nil {
+			return err
+		}
+		if err := nodeprobe.LoadKeys(tx, nodes); err != nil {
+			return err
+		}
+		_, err := loadNodeProbeEvidence(tx, nodes)
+		return err
+	})
+	if err != nil {
 		respondInternalError(c, err)
 		return
-	} else if needFilter {
-		query = query.Where("id IN ?", nodeIDs)
 	}
-
-	var nodes []model.Node
-	if err := query.Order("id asc").Find(&nodes).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	for i := range nodes {
+		nodes[i] = nodes[i].Sanitized()
 	}
-
-	safeNodes := make([]model.Node, 0, len(nodes))
-	for _, node := range nodes {
-		safeNodes = append(safeNodes, node.Sanitized())
-	}
-
-	respondOK(c, safeNodes)
+	respondOK(c, nodes)
 }
 
 // Get godoc
 // @Summary      获取节点详情
-// @Description  返回单个节点的详细信息
+// @Description  返回节点详情，connection_test 描述最近完成的探测及其是否适用于当前连接配置；当前配置仍匹配最近生效探测且没有更新受理的探测时附带 probe_token。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "节点 ID"
-// @Success      200  {object}  handlers.Response{data=model.Node}
+// @Success      200  {object}  handlers.Response{data=nodeGetResponse}
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /nodes/{id} [get]
@@ -125,17 +145,21 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
+	node, token, err := readNodeWithProbeToken(c.Request.Context(), h.db, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-	respondOK(c, node.Sanitized())
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	respondOK(c, nodeGetResponse{Node: node.Sanitized(), ProbeToken: token})
 }
 
 // Create godoc
 // @Summary      创建节点
-// @Description  添加新的服务器节点
+// @Description  添加新的服务器节点。maintenance_start、maintenance_end 和 expiry_date 可省略或为 null；空字符串表示清除，其他值必须是 RFC3339。维护时间必须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。expiry_date 可早于当前时间。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -181,7 +205,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 
 // Update godoc
 // @Summary      更新节点
-// @Description  更新节点配置信息
+// @Description  更新节点配置信息。expected_revision 省略或为 null 时兼容旧客户端；提供时必须为 32 位小写十六进制，版本冲突返回 409 node_revision_conflict。maintenance_start、maintenance_end 和 expiry_date 省略或为 null 时保留原值；空字符串表示清除，其他值必须是 RFC3339。更改维护时间时合并已有值，须同时存在或同时为空，结束时间须晚于开始时间（按微秒精度比较）；无效输入返回 400。未更改的旧无效维护时间可保留，expiry_date 可早于当前时间。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -192,6 +216,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Router       /nodes/{id} [put]
 func (h *NodeHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -222,6 +247,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		ExpiryDate:       req.ExpiryDate,
 		Archived:         req.Archived,
 		UseSudo:          req.UseSudo,
+		ExpectedRevision: req.ExpectedRevision,
 	})
 	if err != nil {
 		handleNodeServiceError(c, err, req.BackupDir)
@@ -229,14 +255,18 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 
 	resp := nodeUpdateResponse{Node: nodeObj.Sanitized()}
-	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
-		resp.Warning = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
+	if strings.TrimSpace(req.BackupDir) != "" && oldBackupDir != nodeObj.BackupDir {
+		resp.Warning = "备份目录标识已更改，已有备份数据不会自动迁移"
 	}
 	respondOK(c, resp)
 }
 
 // handleNodeServiceError maps errors from NodeService to appropriate HTTP responses.
 func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
+	if errors.Is(err, repository.ErrNodeRevisionConflict) {
+		respondConflictData(c, "节点配置已变更，请重新加载", gin.H{"error_code": "node_revision_conflict"})
+		return
+	}
 	if errors.Is(err, apperr.ErrValidation) {
 		msg := err.Error()
 		prefix := apperr.ErrValidation.Error() + ": "
@@ -263,7 +293,7 @@ func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
 
 // BatchDelete godoc
 // @Summary      批量删除节点
-// @Description  批量删除多个节点及其关联的策略关联、任务、告警
+// @Description  批量删除多个节点及其策略关联、任务、告警；有启用的演练引用时拒绝整批删除。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -272,6 +302,7 @@ func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
 // @Success      200   {object}  handlers.Response
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Router       /nodes/batch-delete [post]
 func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var req nodeBatchDeleteRequest
@@ -328,6 +359,10 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 	deleted, notFoundIDs, err := h.svc.BatchDelete(c.Request.Context(), nodeIDs)
 	if err != nil {
+		if errors.Is(err, repository.ErrNodeDrillTargetInUse) {
+			respondConflict(c, "节点正被已启用的恢复演练使用")
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
@@ -350,7 +385,7 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 // Delete godoc
 // @Summary      删除节点
-// @Description  删除指定节点及其关联的策略关联、任务、告警
+// @Description  删除指定节点及其策略关联、任务、告警；有启用的演练引用时拒绝删除。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -358,6 +393,7 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 // @Success      200  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
 // @Router       /nodes/{id} [delete]
 func (h *NodeHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -370,6 +406,10 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 			respondNotFound(c, "节点不存在")
 			return
 		}
+		if errors.Is(err, repository.ErrNodeDrillTargetInUse) {
+			respondConflict(c, "节点正被已启用的恢复演练使用")
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
@@ -379,12 +419,14 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 
 // TestConnection godoc
 // @Summary      测试节点 SSH 连接
-// @Description  测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间
+// @Description  测试 SSH 连通性；最新受理且配置未变的结果返回 probe_token 和 probe_at，过时结果返回 stale=true。expected_revision 不匹配时不受理或连接；无效值返回 400。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "节点 ID"
+// @Param        expected_revision  query  string  false  "保存后的节点版本，32 位小写十六进制"
 // @Success      200  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /nodes/{id}/test-connection [post]
@@ -393,189 +435,132 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	if !ok {
 		return
 	}
-
-	var node model.Node
-	if err := h.db.Preload("SSHKey").First(&node, id).Error; err != nil {
+	var expected *string
+	if value, present := c.GetQuery("expected_revision"); present {
+		expected = &value
+	}
+	if err := node.ValidateExpectedRevision(expected); err != nil {
+		handleNodeServiceError(c, err, "")
+		return
+	}
+	ctx := c.Request.Context()
+	snap, err := admitNodeProbeExpected(ctx, h.db, id, expected)
+	if errors.Is(err, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-	nodeLog := logger.Module("api").With().Uint("node_id", node.ID).Logger()
-
-	authMethods, _, credential, err := sshutil.BuildSSHAuthWithKeyForPurpose(node, h.db, sshutil.PurposeNodeTest)
 	if err != nil {
-		testedAt := time.Now()
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
+		if ctx.Err() == nil {
+			respondInternalError(c, err)
 		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeBlocked,
-			ErrorMessage:     err.Error(),
-			Metadata: map[string]any{
-				"stage": "auth_build",
-			},
-		})
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
 		return
 	}
-
-	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
-	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
-	if err != nil {
-		testedAt := time.Now()
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
-		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeFailure,
-			ErrorMessage:     err.Error(),
-			Metadata: map[string]any{
-				"stage": "host_key",
-			},
-		})
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
-		return
-	}
-
+	node := snap.node
+	credential := snap.credential
+	stage := "auth_build"
+	outcome := credentialaudit.OutcomeBlocked
+	probeErr := snap.authErr
 	start := time.Now()
-	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User:              node.Username,
-		Auth:              authMethods,
-		HostKeyCallback:   hostKeyCallback,
-		HostKeyAlgorithms: sshutil.HostKeyAlgorithmsForAddress(address),
-		Timeout:           5 * time.Second,
-	})
-	testedAt := time.Now()
-	if err != nil {
-		node.Status = "offline"
-		node.ConnectionLatency = 0
-		node.LastSeenAt = &testedAt
-		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
-		}
-		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
-		var hostKeyErr *sshutil.HostKeyError
-		isHostKeyErr := errors.As(err, &hostKeyErr)
-		metadata := map[string]any{
-			"stage":      "dial",
-			"latency_ms": int(time.Since(start).Milliseconds()),
-		}
-		if isHostKeyErr {
-			metadata["host_key_issue"] = string(hostKeyErr.Kind)
-		}
-		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-			Action:           "node.credential.test_connection",
-			Purpose:          sshutil.PurposeNodeTest,
-			CredentialKind:   credential.Kind,
-			CredentialSource: credential.Source,
-			SSHKeyID:         credential.KeyID,
-			NodeID:           credentialaudit.PtrUint(node.ID),
-			Outcome:          credentialaudit.OutcomeFailure,
-			ErrorMessage:     err.Error(),
-			Metadata:         metadata,
+	latency := 0
+	if probeErr == nil {
+		dialCtx, cancelDial := context.WithTimeout(ctx, 5*time.Second)
+		stage = "host_key"
+		outcome = credentialaudit.OutcomeFailure
+		callback, callbackErr := sshutil.ResolveSSHHostKeyCallbackWithGuard(func(prepare, write func() error) error {
+			return guardNodeProbe(dialCtx, h.db, snap, false, prepare, write)
 		})
-		if isHostKeyErr {
-			errorCode := "ssh_host_key_unknown"
-			if hostKeyErr.Kind == sshutil.HostKeyMismatch {
-				errorCode = "ssh_host_key_mismatch"
+		probeErr = callbackErr
+		if probeErr == nil {
+			stage = "dial"
+			address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
+			client, dialErr := sshutil.DialSSH(dialCtx, address, node.Username, snap.auth, callback)
+			probeErr = dialErr
+			if client != nil {
+				_ = client.Close()
 			}
-			respondOK(c, gin.H{
-				"ok":         false,
-				"message":    hostKeyErr.Error(),
-				"error_code": errorCode,
-				"host_key": gin.H{
-					"algorithm":          hostKeyErr.Algorithm(),
-					"fingerprint_sha256": hostKeyErr.Fingerprint(),
-				},
-			})
-			return
+			if probeErr == nil {
+				latency = int(time.Since(start).Milliseconds())
+				if latency <= 0 {
+					latency = 1
+				}
+			}
 		}
-		respondOK(c, gin.H{
-			"ok":      false,
-			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
-		})
+		cancelDial()
+	}
+	if ctx.Err() != nil {
 		return
 	}
-	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	latency := int(time.Since(start).Milliseconds())
-	if latency <= 0 {
-		latency = 1
+	if errors.Is(probeErr, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
 	}
-
-	node.Status = "online"
-	node.ConnectionLatency = latency
-	node.LastSeenAt = &testedAt
-	if err := h.db.Save(&node).Error; err != nil {
+	testedAt := time.Now().UTC()
+	status := "offline"
+	if probeErr == nil {
+		status = "online"
+		outcome = credentialaudit.OutcomeSuccess
+		stage = "success"
+	}
+	lastUsed, err := applyNodeProbe(ctx, h.db, snap, status, latency, testedAt)
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, errNodeProbeStale) {
+		respondOK(c, gin.H{"ok": false, "stale": true, "message": staleNodeProbeMessage})
+		return
+	}
+	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
-
-	lastUsedUpdated := false
-	if node.SSHKeyID != nil {
-		now := time.Now()
-		if err := h.db.Model(&model.SSHKey{}).Where("id = ?", *node.SSHKeyID).Update("last_used_at", &now).Error; err != nil {
-			nodeLog.Warn().Uint("ssh_key_id", *node.SSHKeyID).Err(err).Msg("更新 SSH Key 最近使用时间失败")
-		} else {
-			lastUsedUpdated = true
-		}
+	metadata := map[string]any{"stage": stage}
+	if stage == "dial" || stage == "success" {
+		metadata["latency_ms"] = int(time.Since(start).Milliseconds())
 	}
-
-	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-		Action:           "node.credential.test_connection",
-		Purpose:          sshutil.PurposeNodeTest,
-		CredentialKind:   credential.Kind,
-		CredentialSource: credential.Source,
-		SSHKeyID:         credential.KeyID,
-		NodeID:           credentialaudit.PtrUint(node.ID),
-		Outcome:          credentialaudit.OutcomeSuccess,
-		Metadata: map[string]any{
-			"stage":                "success",
-			"latency_ms":           latency,
-			"last_used_at_updated": lastUsedUpdated,
-		},
-	})
-
-	respondOK(c, gin.H{
-		"ok":         true,
-		"message":    "SSH 连通性检测成功",
-		"latency_ms": latency,
-		"probe_at":   testedAt,
-	})
+	if stage == "success" {
+		metadata["last_used_at_updated"] = lastUsed
+	}
+	var hostKeyErr *sshutil.HostKeyError
+	if errors.As(probeErr, &hostKeyErr) {
+		metadata["host_key_issue"] = string(hostKeyErr.Kind)
+	}
+	event := credentialaudit.Event{Action: "node.credential.test_connection", Purpose: sshutil.PurposeNodeTest, CredentialKind: credential.Kind, CredentialSource: credential.Source, SSHKeyID: credential.KeyID, NodeID: credentialaudit.PtrUint(node.ID), Outcome: outcome, Metadata: metadata}
+	if probeErr != nil {
+		event.ErrorMessage = probeErr.Error()
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	writeCredentialAuditFromGin(c, h.db.WithContext(ctx), event)
+	payload := gin.H{"ok": probeErr == nil, "probe_at": testedAt, "probe_token": snap.token}
+	if probeErr == nil {
+		payload["message"] = "SSH 连通性检测成功"
+		payload["latency_ms"] = latency
+	} else if hostKeyErr != nil {
+		payload["message"] = hostKeyErr.Error()
+		payload["error_code"] = "ssh_host_key_unknown"
+		if hostKeyErr.Kind == sshutil.HostKeyMismatch {
+			payload["error_code"] = "ssh_host_key_mismatch"
+		}
+		payload["host_key"] = gin.H{"algorithm": hostKeyErr.Algorithm(), "fingerprint_sha256": hostKeyErr.Fingerprint()}
+	} else {
+		payload["message"] = "SSH 连接失败，请检查主机地址、端口、认证配置"
+	}
+	respondOK(c, payload)
 }
 
 type trustHostKeyRequest struct {
 	FingerprintSHA256 string `json:"fingerprint_sha256"`
+	ProbeToken        string `json:"probe_token"`
 }
 
 // TrustHostKey godoc
 // @Summary      信任节点 SSH 主机指纹
-// @Description  重新读取节点当前主机密钥（不发送任何凭据），仅当其 SHA256 指纹与提交值一致且 known_hosts 中没有冲突记录时写入 known_hosts。仅管理员可用。
+// @Description  重新读取节点当前主机密钥（不发送任何凭据），仅当 SHA256 指纹一致且 known_hosts 无冲突记录时写入。可提供 probe_token，结果过时返回 409 node_probe_stale。仅管理员可用。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -606,14 +591,37 @@ func (h *NodeHandler) TrustHostKey(c *gin.Context) {
 		return
 	}
 
-	var node model.Node
-	if err := h.db.First(&node, id).Error; err != nil {
+	ctx := c.Request.Context()
+	snap, err := trustProbeSnapshot(ctx, h.db, id, req.ProbeToken)
+	if errors.Is(err, errNodeProbeStale) {
+		respondConflictData(c, staleNodeProbeMessage, gin.H{"error_code": "node_probe_stale"})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondNotFound(c, "节点不存在")
 		return
 	}
-
+	if err != nil {
+		if ctx.Err() == nil {
+			respondInternalError(c, err)
+		}
+		return
+	}
+	node := snap.node
 	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
-	result, err := sshutil.TrustNewHostKey(c.Request.Context(), address, fingerprint)
+	result, err := sshutil.TrustNewHostKeyWithGuard(ctx, address, fingerprint, func(prepare, write func() error) error {
+		if req.ProbeToken != "" {
+			return guardNodeProbe(ctx, h.db, snap, true, prepare, write)
+		}
+		return guardLegacyTrust(ctx, h.db, snap, prepare, write)
+	})
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, errNodeProbeStale) {
+		respondConflictData(c, staleNodeProbeMessage, gin.H{"error_code": "node_probe_stale"})
+		return
+	}
 
 	metadata := map[string]any{"stage": "host_key_trust"}
 	if result.Algorithm != "" {

@@ -186,7 +186,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 	// 数据库事务
 	migratedTasks := 0
 
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	err = referenceWriteTransaction(h.db, func(tx *gorm.DB) error {
 		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
 			return fmt.Errorf("锁定迁移目标归属失败: %w", err)
 		}
@@ -259,9 +259,12 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 			currentOwners = append(currentOwners, owner)
 		}
 
-		// 锁定源节点行，防止并发迁移冲突。
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&model.Node{}, sourceID).Error; err != nil {
-			return fmt.Errorf("锁定源节点失败: %w", err)
+		// Lock both nodes in ID order after the policy and task locks. The
+		// destination is a new reference and must still exist at cutover.
+		for _, id := range uniqueSortedUint([]uint{sourceID, req.TargetNodeID}) {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&model.Node{}, id).Error; err != nil {
+				return fmt.Errorf("锁定迁移节点失败: %w", err)
+			}
 		}
 
 		// a. 迁移 PolicyNode 关联

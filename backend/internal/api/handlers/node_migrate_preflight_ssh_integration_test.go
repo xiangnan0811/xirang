@@ -157,13 +157,14 @@ func newPreflightManagedCredential(t *testing.T) preflightManagedCredential {
 	}
 }
 
-func configurePreflightManagedKeyServer(t *testing.T, server *dockerSSHTestServer, expected ssh.PublicKey) {
-	t.Helper()
-	server.config.PublicKeyCallback = func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if metadata.User() != "docker-test" || !bytes.Equal(key.Marshal(), expected.Marshal()) {
-			return nil, fmt.Errorf("managed SSH test key rejected")
+func configurePreflightManagedKeyServer(expected ssh.PublicKey) func(*ssh.ServerConfig) {
+	return func(config *ssh.ServerConfig) {
+		config.PublicKeyCallback = func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if metadata.User() != "docker-test" || !bytes.Equal(key.Marshal(), expected.Marshal()) {
+				return nil, fmt.Errorf("managed SSH test key rejected")
+			}
+			return nil, nil
 		}
-		return nil, nil
 	}
 }
 
@@ -255,12 +256,10 @@ func TestMigrationPreflightAuditsSourceAndTargetManagedCredentials(t *testing.T)
 	targetManaged := newPreflightManagedCredential(t)
 	sourceServer := startDockerSSHTestServer(t, func(_ string, channel ssh.Channel, _ <-chan struct{}) {
 		writeDockerSSHResult(channel, []byte("100G 80G\n"), 0)
-	})
+	}, configurePreflightManagedKeyServer(sourceManaged.publicKey))
 	targetServer := startDockerSSHTestServer(t, func(_ string, channel ssh.Channel, _ <-chan struct{}) {
 		writeDockerSSHResult(channel, []byte("50G 40G\n"), 0)
-	})
-	configurePreflightManagedKeyServer(t, sourceServer, sourceManaged.publicKey)
-	configurePreflightManagedKeyServer(t, targetServer, targetManaged.publicKey)
+	}, configurePreflightManagedKeyServer(targetManaged.publicKey))
 
 	db := openNodeHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
@@ -314,12 +313,10 @@ func TestMigrationPreflightAuditsBlockedRetiredSourceCredentialIndependently(t *
 	targetManaged := newPreflightManagedCredential(t)
 	sourceServer := startDockerSSHTestServer(t, func(_ string, channel ssh.Channel, _ <-chan struct{}) {
 		writeDockerSSHResult(channel, []byte("100G 80G\n"), 0)
-	})
+	}, configurePreflightManagedKeyServer(sourceManaged.publicKey))
 	targetServer := startDockerSSHTestServer(t, func(_ string, channel ssh.Channel, _ <-chan struct{}) {
 		writeDockerSSHResult(channel, []byte("100G 20G\n"), 0)
-	})
-	configurePreflightManagedKeyServer(t, sourceServer, sourceManaged.publicKey)
-	configurePreflightManagedKeyServer(t, targetServer, targetManaged.publicKey)
+	}, configurePreflightManagedKeyServer(targetManaged.publicKey))
 
 	db := openNodeHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {

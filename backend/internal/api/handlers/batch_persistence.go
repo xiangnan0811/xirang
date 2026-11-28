@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,34 @@ var errBatchIdempotencyConflict = errors.New("batch idempotency conflict")
 var errBatchDeleted = errors.New("batch already deleted")
 var errBatchActive = errors.New("batch still has active dispatch or execution effects")
 var errBatchRetryAlreadyClaimed = errors.New("batch retry source already claimed")
+
+type batchNodeMissingError struct{ id uint }
+
+func (e *batchNodeMissingError) Error() string { return fmt.Sprintf("节点 %d 不存在", e.id) }
+
+// Keep PostgreSQL reads fresh after waits even with a stronger server default.
+func batchWriteTransaction(ctx context.Context, db *gorm.DB, body func(*gorm.DB) error) error {
+	if db.Name() == "postgres" {
+		return db.WithContext(ctx).Transaction(body, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	}
+	return dbtx.WithSQLiteBusyRetryTx(ctx, db, body)
+}
+
+func lockBatchNodes(tx *gorm.DB, ids []uint) (map[uint]model.Node, error) {
+	locked := make(map[uint]model.Node, len(ids))
+	for _, id := range uniqueSortedUint(ids) {
+		var node model.Node
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "name", "archived").First(&node, id).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &batchNodeMissingError{id: id}
+		}
+		if err != nil {
+			return nil, err
+		}
+		locked[id] = node
+	}
+	return locked, nil
+}
 
 func insertBatchCommandTasksTx(tx *gorm.DB, batch model.BatchCommand, req batchCommandRequest, nodes []batchNode, sources []batchRetrySource) ([]model.BatchCommandDispatch, error) {
 	if sources != nil && len(sources) != len(nodes) {
@@ -109,11 +138,49 @@ func (h *BatchHandler) createBatchTasks(ctx context.Context, actorID uint, key s
 	var batch model.BatchCommand
 	var dispatches []model.BatchCommandDispatch
 	created := false
-	err = dbtx.WithSQLiteBusyRetryTx(ctx, h.db, func(tx *gorm.DB) error {
+	err = batchWriteTransaction(ctx, h.db, func(tx *gorm.DB) error {
 		// A retry owns a fresh candidate and slice: rolled-back IDs are not state.
 		batch = model.BatchCommand{ID: generateBatchID(), RequesterID: actorID, IdempotencyKey: key, RequestHash: fingerprint, ProvenanceVersion: 1, Retain: req.Retain}
 		dispatches = nil
 		created = false
+		// Durable replays do not depend on the continued existence of the
+		// selected nodes, and must not acquire their locks.
+		lookupReplay := func() (bool, error) {
+			var existing model.BatchCommand
+			result := tx.Where("requester_id = ? AND idempotency_key = ?", actorID, key).Limit(1).Find(&existing)
+			if result.Error != nil {
+				return false, result.Error
+			}
+			if result.RowsAffected == 0 {
+				return false, nil
+			}
+			batch = existing
+			if batch.RequestHash != fingerprint {
+				return true, errBatchIdempotencyConflict
+			}
+			if batch.DeletedAt != nil {
+				return true, errBatchDeleted
+			}
+			return true, tx.Where("batch_id = ?", batch.ID).Order("task_id").Find(&dispatches).Error
+		}
+		if found, err := lookupReplay(); found || err != nil {
+			return err
+		}
+		ids := make([]uint, 0, len(nodes))
+		for _, node := range nodes {
+			ids = append(ids, node.ID)
+		}
+		if _, err := lockBatchNodes(tx, ids); err != nil {
+			var missingNode *batchNodeMissingError
+			if errors.As(err, &missingNode) {
+				if found, replayErr := lookupReplay(); found || replayErr != nil {
+					return replayErr
+				}
+			}
+			return err
+		}
+		// Retry also locks its selected nodes before claiming requester/key.
+		// Keep that ordering even when another request is claiming this key.
 		result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "requester_id"}, {Name: "idempotency_key"}}, DoNothing: true}).Create(&batch)
 		if result.Error != nil {
 			return result.Error

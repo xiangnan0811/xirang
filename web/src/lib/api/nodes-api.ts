@@ -1,5 +1,5 @@
-import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
-import { parseNumericId, request, formatTime } from "./core";
+import type { NewNodeInput, NodeConnectionTest, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
+import { ApiError, parseNumericId, request, formatTime } from "./core";
 import { finiteNumber } from "./number-utils";
 
 type NodeResponse = {
@@ -22,6 +22,12 @@ type NodeResponse = {
   archived?: boolean;
   backup_dir?: string;
   use_sudo?: boolean;
+  /** Opaque identity of the latest applied connection test; omitted unless it still matches the node's current identity. */
+  probe_token?: string | null;
+  /** Opaque revision of the persisted configuration; legacy servers omit it. */
+  revision?: string | null;
+  /** Latest completed connection test outcome and whether it still describes the current connection settings. */
+  connection_test?: { status?: string; current?: boolean } | null;
 };
 
 type NodeBatchDeleteResponse = {
@@ -32,9 +38,13 @@ type NodeBatchDeleteResponse = {
 type TestNodeResponse = {
   ok: boolean;
   message: string;
+  /** Present when the server no longer accepts this test as the node's latest; carries no health or host key. */
+  stale?: boolean;
   latency_ms?: number;
   /** Immediate timestamp of this manual test. Not a periodic probe. */
   probe_at?: string;
+  /** Opaque identity of this applied test. Legacy servers omit it. */
+  probe_token?: string;
   error_code?: string;
   host_key?: {
     algorithm?: string;
@@ -69,9 +79,13 @@ export type NodeUpdateResult = {
 export type NodeConnectionTestResult = {
   ok: boolean;
   message: string;
+  /** The server superseded this test; no other field describes the node. */
+  stale?: true;
   latencyMs?: number;
   /** Display time of this manual test, when the server returned one. */
   testedAt?: string;
+  /** Opaque identity of this applied test, when the server returned one. */
+  probeToken?: string;
   errorCode?: NodeHostKeyIssueCode;
   hostKey?: NodeHostKeyInfo;
 };
@@ -111,7 +125,50 @@ function mapNodeStatus(raw?: string): NodeStatus {
   }
 }
 
+// Go RFC3339 with up to nanosecond precision and an explicit zone; zone-less local times are rejected.
+const RFC3339_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * Exact instant of a server timestamp: whole signed epoch seconds plus nanoseconds, so sub-millisecond
+ * precision and the offset survive. Undefined when absent, zone-less or not a real calendar time.
+ */
+function parseBackupInstant(raw: string | null | undefined): NonNullable<NodeRecord["lastBackupInstant"]> | undefined {
+  if (typeof raw !== "string") return undefined;
+  const match = RFC3339_TIMESTAMP.exec(raw);
+  if (!match) return undefined;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  if (hour > 23 || minute > 59 || second > 59) return undefined;
+  // Read the wall clock as UTC; setUTCFullYear keeps years 0-99 literal. A rolled-over date means an impossible calendar day.
+  const wallClock = new Date(Date.UTC(2000, 0, 1, hour, minute, second));
+  wallClock.setUTCFullYear(year, month - 1, day);
+  if (wallClock.getUTCFullYear() !== year || wallClock.getUTCMonth() !== month - 1 || wallClock.getUTCDate() !== day) {
+    return undefined;
+  }
+  let offsetSeconds = 0;
+  if (match[8]) {
+    const offsetHours = Number(match[9]);
+    const offsetMinutes = Number(match[10]);
+    if (offsetHours > 23 || offsetMinutes > 59) return undefined;
+    offsetSeconds = (match[8] === "-" ? -1 : 1) * (offsetHours * 3600 + offsetMinutes * 60);
+  }
+  return {
+    epochSeconds: wallClock.getTime() / 1000 - offsetSeconds,
+    nanoseconds: Number((match[7] ?? "").padEnd(9, "0")),
+  };
+}
+
+function mapConnectionTest(raw: NodeResponse["connection_test"]): NodeConnectionTest | undefined {
+  if (!raw || (raw.status !== "online" && raw.status !== "offline") || typeof raw.current !== "boolean") {
+    return undefined;
+  }
+  return { status: raw.status, current: raw.current };
+}
+
 function mapNode(row: NodeResponse): NodeRecord {
+  const probeToken = typeof row.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : undefined;
+  const revision = typeof row.revision === "string" && row.revision.length > 0 ? row.revision : undefined;
+  const connectionTest = mapConnectionTest(row.connection_test);
+  const lastBackupInstant = parseBackupInstant(row.last_backup_at);
   return {
     id: row.id,
     name: row.name,
@@ -125,8 +182,10 @@ function mapNode(row: NodeResponse): NodeRecord {
     basePath: row.base_path ?? "/",
     status: mapNodeStatus(row.status),
     tags: row.tags ? row.tags.split(",").map((one) => one.trim()).filter(Boolean) : [],
+    rawTags: row.tags ?? "",
     lastSeenAt: formatTime(row.last_seen_at),
     lastBackupAt: formatTime(row.last_backup_at),
+    ...(lastBackupInstant ? { lastBackupInstant } : {}),
     connectionLatencyMs: row.connection_latency_ms,
     maintenanceStart: row.maintenance_start ?? undefined,
     maintenanceEnd: row.maintenance_end ?? undefined,
@@ -134,6 +193,9 @@ function mapNode(row: NodeResponse): NodeRecord {
     archived: row.archived ?? false,
     backupDir: row.backup_dir || '',
     useSudo: row.use_sudo ?? false,
+    ...(probeToken ? { probeToken } : {}),
+    ...(revision ? { revision } : {}),
+    ...(connectionTest ? { connectionTest } : {}),
   };
 }
 
@@ -166,6 +228,28 @@ function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
 }
 
 export const __test__ = { mapNodeDoctorResult, mapNode };
+
+function isNodeConflict(error: unknown, errorCode: string): boolean {
+  if (!(error instanceof ApiError) || (error.status !== 409 && error.httpStatus !== 409)) {
+    return false;
+  }
+  const detail = error.detail;
+  if (!detail || typeof detail !== "object" || !("data" in detail)) {
+    return false;
+  }
+  const data = detail.data;
+  return Boolean(data && typeof data === "object" && "error_code" in data && data.error_code === errorCode);
+}
+
+/** Trust was refused because the node changed or a newer connection test applied after the reviewed one. */
+export function isNodeProbeStaleError(error: unknown): boolean {
+  return isNodeConflict(error, "node_probe_stale");
+}
+
+/** The update was refused before any change because the node was saved again after the editor opened it. */
+export function isNodeRevisionConflictError(error: unknown): boolean {
+  return isNodeConflict(error, "node_revision_conflict");
+}
 
 function isHostKeyIssueCode(value: unknown): value is NodeHostKeyIssueCode {
   return value === "ssh_host_key_unknown" || value === "ssh_host_key_mismatch";
@@ -232,6 +316,7 @@ export function createNodesApi() {
       return mapNode(row);
     },
 
+    /** `expectedRevision` (the revision the editor opened) makes the server refuse the write if the node changed since. */
     async updateNode(token: string, nodeId: number, input: NewNodeInput): Promise<NodeUpdateResult> {
       const payload = await request<NodeUpdateResponse>(`/nodes/${nodeId}`, {
         method: "PUT",
@@ -253,6 +338,7 @@ export function createNodesApi() {
           maintenance_start: input.maintenanceStart ?? undefined,
           maintenance_end: input.maintenanceEnd ?? undefined,
           expiry_date: input.expiryDate ?? undefined,
+          expected_revision: input.expectedRevision,
         }
       });
       if (!payload?.node || typeof payload.node.id !== "number" || !payload.node.name || !payload.node.host) {
@@ -287,25 +373,47 @@ export function createNodesApi() {
       };
     },
 
-    async testNodeConnection(token: string, nodeId: number): Promise<NodeConnectionTestResult> {
-      const row = await request<TestNodeResponse>(`/nodes/${nodeId}/test-connection`, {
+    /**
+     * `expectedRevision` admits the test only while the node still has that committed revision; otherwise the
+     * server answers with a stale result before dialing. Only the automatic post-save test sends it.
+     */
+    async testNodeConnection(
+      token: string,
+      nodeId: number,
+      options?: { expectedRevision?: string },
+    ): Promise<NodeConnectionTestResult> {
+      const query = options?.expectedRevision
+        ? `?expected_revision=${encodeURIComponent(options.expectedRevision)}`
+        : "";
+      const row = await request<TestNodeResponse>(`/nodes/${nodeId}/test-connection${query}`, {
         method: "POST",
         token
       });
+      if (row?.stale === true) {
+        return { ok: false, stale: true, message: String(row.message ?? "") };
+      }
       const testedAt = typeof row?.probe_at === "string" ? formatTime(row.probe_at) : "";
+      const probeToken = typeof row?.probe_token === "string" && row.probe_token.length > 0 ? row.probe_token : "";
       return {
         ok: Boolean(row?.ok),
         message: String(row?.message ?? ""),
         latencyMs: row?.latency_ms,
         ...(testedAt && testedAt !== "-" ? { testedAt } : {}),
+        ...(probeToken ? { probeToken } : {}),
         ...mapHostKeyIssue(row),
       };
     },
 
+    /**
+     * `probeToken` binds the trust to the reviewed test result; the server refuses it with
+     * `node_probe_stale` when that result no longer describes the node. Without it the
+     * server only compares the fresh fingerprint (legacy contract).
+     */
     async trustNodeHostKey(
       token: string,
       nodeId: number,
       fingerprintSha256: string,
+      probeToken?: string,
     ): Promise<{ alreadyTrusted: boolean; algorithm: string; fingerprintSha256: string }> {
       const row = await request<{
         already_trusted?: boolean;
@@ -314,7 +422,9 @@ export function createNodesApi() {
       }>(`/nodes/${nodeId}/trust-host-key`, {
         method: "POST",
         token,
-        body: { fingerprint_sha256: fingerprintSha256 },
+        body: probeToken
+          ? { fingerprint_sha256: fingerprintSha256, probe_token: probeToken }
+          : { fingerprint_sha256: fingerprintSha256 },
       });
       return {
         alreadyTrusted: Boolean(row?.already_trusted),

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -158,6 +159,23 @@ func TestTrustNewHostKeyAppendsConfirmedKeyWithoutAuthenticating(t *testing.T) {
 	result, err = TrustNewHostKey(context.Background(), server.address, fingerprint)
 	if err != nil || !result.AlreadyTrusted {
 		t.Fatalf("repeat trust must report already trusted: result=%+v err=%v", result, err)
+	}
+	stale := errors.New("stale identity")
+	guardCalled := false
+	result, err = TrustNewHostKeyWithGuard(context.Background(), server.address, fingerprint, func(func() error, func() error) error {
+		guardCalled = true
+		return stale
+	})
+	if !guardCalled || !errors.Is(err, stale) || result.AlreadyTrusted {
+		t.Fatalf("already trusted stale guard: result=%+v called=%v err=%v", result, guardCalled, err)
+	}
+	guardCalled = false
+	_, err = TrustNewHostKeyWithGuard(context.Background(), server.address, "SHA256:AAAA", func(func() error, func() error) error {
+		guardCalled = true
+		return stale
+	})
+	if guardCalled || !errors.Is(err, ErrHostKeyFingerprintChanged) {
+		t.Fatalf("fingerprint mismatch must precede guard: called=%v err=%v", guardCalled, err)
 	}
 	content, err := os.ReadFile(knownHostsPath)
 	if err != nil {
@@ -576,5 +594,326 @@ func TestCertAuthorityBackedHostKeepsCertificateNegotiation(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("known_hosts must not change: before=%q after=%q", before, after)
+	}
+}
+
+func TestHostKeyWriteGuardsRejectBeforeAppend(t *testing.T) {
+	path := setupStrictKnownHosts(t)
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
+	server := startHostKeyTestServer(t)
+	stale := errors.New("stale identity")
+	guard := func(prepare, write func() error) error { return stale }
+	callback, err := ResolveSSHHostKeyCallbackWithGuard(guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := DialSSH(context.Background(), server.address, "tester", []ssh.AuthMethod{ssh.Password("secret")}, callback)
+	if client != nil {
+		_ = client.Close()
+	}
+	if !errors.Is(err, stale) {
+		t.Fatalf("auto-accept guard error lost: %v", err)
+	}
+	if server.authAttempts.Load() != 0 {
+		t.Fatal("auto-accept rejection sent credentials")
+	}
+	_, err = TrustNewHostKeyWithGuard(context.Background(), server.address, ssh.FingerprintSHA256(server.hostKey), guard)
+	if !errors.Is(err, stale) {
+		t.Fatalf("trust guard error lost: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || len(content) != 0 {
+		t.Fatalf("rejected guards wrote known_hosts: %q %v", content, err)
+	}
+	if server.authAttempts.Load() != 0 {
+		t.Fatal("trust capture sent credentials")
+	}
+}
+
+func TestGuardedKnownHostQueuedCancellationAndConflict(t *testing.T) {
+	path := setupStrictKnownHosts(t)
+	server := startHostKeyTestServer(t)
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	knownHostsWriteMu.Lock()
+	go func() {
+		close(started)
+		_, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(prepare, write func() error) error {
+			if knownHostsWriteMu.TryLock() {
+				knownHostsWriteMu.Unlock()
+				return errors.New("identity guard ran before file lock")
+			}
+			if err := prepare(); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return write()
+		})
+		done <- err
+	}()
+	<-started
+	cancel()
+	knownHostsWriteMu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued cancelled guard: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || len(content) != 0 {
+		t.Fatalf("cancelled append changed known_hosts: %q %v", content, err)
+	}
+	stale := errors.New("stale identity")
+	started = make(chan struct{})
+	done = make(chan error, 1)
+	var invalid atomic.Bool
+	knownHostsWriteMu.Lock()
+	go func() {
+		close(started)
+		_, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(prepare, write func() error) error {
+			if err := prepare(); err != nil {
+				return err
+			}
+			if invalid.Load() {
+				return stale
+			}
+			return write()
+		})
+		done <- err
+	}()
+	<-started
+	invalid.Store(true)
+	knownHostsWriteMu.Unlock()
+	if err := <-done; !errors.Is(err, stale) {
+		t.Fatalf("queued stale guard: %v", err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil || len(content) != 0 {
+		t.Fatalf("stale append changed known_hosts: %q %v", content, err)
+	}
+	if _, err := recordNewKnownHost(path, server.address, remote, server.hostKey); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if already, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(prepare, write func() error) error {
+		called = true
+		if err := prepare(); err != nil {
+			return err
+		}
+		return write()
+	}); err != nil || !already || !called {
+		t.Fatalf("already trusted should revalidate guard: already=%v called=%v err=%v", already, called, err)
+	}
+	if already, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(func() error, func() error) error { return stale }); !errors.Is(err, stale) || already {
+		t.Fatalf("stale already trusted guard: already=%v err=%v", already, err)
+	}
+	other := startHostKeyTestServer(t)
+	called = false
+	_, err = recordNewKnownHostWithGuard(path, server.address, remote, other.hostKey, func(func() error, func() error) error { called = true; return nil })
+	var mismatch *HostKeyError
+	if !errors.As(err, &mismatch) || mismatch.Kind != HostKeyMismatch || called {
+		t.Fatalf("conflict should precede guard: called=%v err=%v", called, err)
+	}
+}
+
+func TestGuardedKnownHostReadOnlyPreprovisioned(t *testing.T) {
+	path := setupStrictKnownHosts(t)
+	key := newTestPublicKey(t)
+	hostname := "known.example:22"
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+	content := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key) + "\n"
+	if err := ensureKnownHostsFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err == nil {
+		_ = probe.Close()
+		t.Skip("effective user can write despite read-only mode")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("checking write permission: %v", err)
+	}
+	initial, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	guard := func(prepare, write func() error) error {
+		called = true
+		if err := prepare(); err != nil {
+			return err
+		}
+		return write()
+	}
+	already, err := recordNewKnownHostWithGuard(path, hostname, remote, key, guard)
+	if err != nil || !already || !called {
+		t.Fatalf("read-only known key: already=%v guard called=%v err=%v", already, called, err)
+	}
+	called = false
+	already, err = recordNewKnownHostWithGuard(path, "unknown.example:22", remote, key, guard)
+	if err == nil || already || called {
+		t.Fatalf("read-only unknown key: already=%v guard called=%v err=%v", already, called, err)
+	}
+	called = false
+	_, err = recordNewKnownHostWithGuard(path, hostname, remote, newTestPublicKey(t), guard)
+	var mismatch *HostKeyError
+	if !errors.As(err, &mismatch) || mismatch.Kind != HostKeyMismatch || called {
+		t.Fatalf("read-only conflicting key: guard called=%v err=%v", called, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != content {
+		t.Fatalf("read-only known_hosts changed: %q %v", got, err)
+	}
+	final, err := os.Stat(path)
+	if err != nil || !os.SameFile(initial, final) || initial.Size() != final.Size() || initial.Mode() != final.Mode() || !initial.ModTime().Equal(final.ModTime()) {
+		t.Fatalf("read-only known_hosts metadata changed: %v", err)
+	}
+}
+
+func TestGuardedKnownHostRejectsFileChangesBeforeWrite(t *testing.T) {
+	for _, scenario := range []string{"replacement", "same inode", "same size", "already trusted replacement"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := setupStrictKnownHosts(t)
+			server := startHostKeyTestServer(t)
+			remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+			initial := knownhosts.Line([]string{"unrelated.example"}, server.hostKey)
+			if scenario == "already trusted replacement" {
+				initial = knownhosts.Line([]string{knownhosts.Normalize(server.address)}, server.hostKey) + "\n"
+			}
+			if err := ensureKnownHostsFile(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			moved := path + ".old"
+			changed := initial + "\n# changed\n"
+			if scenario == "same size" {
+				changed = "x" + initial[1:]
+			}
+			wrote := false
+			already, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(prepare, write func() error) error {
+				if scenario == "same inode" || scenario == "same size" {
+					if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+						return err
+					}
+					if scenario == "same size" {
+						modified := time.Now().Add(-time.Hour)
+						if err := os.Chtimes(path, modified, modified); err != nil {
+							return err
+						}
+					}
+				} else {
+					if err := os.Rename(path, moved); err != nil {
+						return err
+					}
+					if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+						return err
+					}
+				}
+				if err := prepare(); err != nil {
+					return err
+				}
+				wrote = true
+				return write()
+			})
+			if err == nil || already || wrote || strings.Contains(err.Error(), path) {
+				t.Fatalf("changed file accepted: already=%v wrote=%v err=%v", already, wrote, err)
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil || string(content) != changed {
+				t.Fatalf("active file changed: %q %v", content, readErr)
+			}
+			if scenario != "same inode" && scenario != "same size" {
+				content, readErr = os.ReadFile(moved)
+				if readErr != nil || string(content) != initial {
+					t.Fatalf("detached file changed: %q %v", content, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestGuardedKnownHostRechecksCurrentPathAfterAuthorization(t *testing.T) {
+	for _, scenario := range []string{"append conflict", "append missing", "already trusted conflict", "already trusted missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := setupStrictKnownHosts(t)
+			server := startHostKeyTestServer(t)
+			remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+			if strings.HasPrefix(scenario, "already trusted") {
+				if err := AppendKnownHost(path, server.address, server.hostKey); err != nil {
+					t.Fatal(err)
+				}
+			}
+			other := newTestPublicKey(t)
+			_, err := recordNewKnownHostWithGuard(path, server.address, remote, server.hostKey, func(prepare, write func() error) error {
+				if err := prepare(); err != nil {
+					return err
+				}
+				if err := write(); err != nil {
+					return err
+				}
+				if err := os.Rename(path, path+".old"); err != nil {
+					return err
+				}
+				if strings.HasSuffix(scenario, "conflict") {
+					return os.WriteFile(path, []byte(knownhosts.Line([]string{knownhosts.Normalize(server.address)}, other)+"\n"), 0o600)
+				}
+				return nil
+			})
+			var mismatch *HostKeyError
+			if err == nil || strings.Contains(err.Error(), path) || (strings.HasSuffix(scenario, "conflict") && (!errors.As(err, &mismatch) || mismatch.Kind != HostKeyMismatch)) {
+				t.Fatalf("replacement accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestAutoAcceptRejectsReplacementBeforeAuthentication(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(strconv.FormatBool(conflict), func(t *testing.T) {
+			path := setupStrictKnownHosts(t)
+			t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
+			server := startHostKeyTestServer(t)
+			other := newTestPublicKey(t)
+			callback, err := ResolveSSHHostKeyCallbackWithGuard(func(prepare, write func() error) error {
+				if err := prepare(); err != nil {
+					return err
+				}
+				if err := write(); err != nil {
+					return err
+				}
+				if err := os.Rename(path, path+".old"); err != nil {
+					return err
+				}
+				if conflict {
+					return os.WriteFile(path, []byte(knownhosts.Line([]string{knownhosts.Normalize(server.address)}, other)+"\n"), 0o600)
+				}
+				return os.WriteFile(path, nil, 0o600)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := DialSSH(context.Background(), server.address, "tester", []ssh.AuthMethod{ssh.Password("secret")}, callback)
+			if client != nil {
+				_ = client.Close()
+			}
+			if err == nil || server.authAttempts.Load() != 0 || strings.Contains(err.Error(), path) {
+				t.Fatalf("replacement accepted or credentials sent: err=%v attempts=%d", err, server.authAttempts.Load())
+			}
+			var mismatch *HostKeyError
+			if conflict && (!errors.As(err, &mismatch) || mismatch.Kind != HostKeyMismatch) {
+				t.Fatalf("conflict not reported: %v", err)
+			}
+		})
 	}
 }

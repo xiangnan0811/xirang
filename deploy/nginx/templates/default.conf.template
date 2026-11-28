@@ -135,6 +135,14 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  # Hashed build assets are real files only. Without this, a missing chunk
+  # (e.g. after deploy/rollback) falls through to the SPA index.html with
+  # HTTP 200, which clients and the service worker would treat as the asset.
+  # No add_header here so the server-level security headers stay inherited.
+  location ^~ /assets/ {
+    try_files $uri =404;
+  }
+
   location / {
     try_files $uri $uri/ /index.html;
   }

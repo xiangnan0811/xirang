@@ -45,49 +45,69 @@ func (s *PolicyService) CloneFromTemplate(ctx context.Context, templateID uint) 
 		return nil, ErrNotTemplate
 	}
 
-	newPolicy := model.Policy{
-		Name:                tmpl.Name + " (副本)",
-		Description:         tmpl.Description,
-		SourcePath:          tmpl.SourcePath,
-		TargetPath:          config.BackupRoot,
-		CronSpec:            tmpl.CronSpec,
-		ExcludeRules:        tmpl.ExcludeRules,
-		BwLimit:             tmpl.BwLimit,
-		BandwidthSchedule:   tmpl.BandwidthSchedule,
-		RetentionDays:       tmpl.RetentionDays,
-		RPOMinutes:          tmpl.RPOMinutes,
-		RTOMinutes:          tmpl.RTOMinutes,
-		RetentionMode:       tmpl.RetentionMode,
-		KeepDaily:           tmpl.KeepDaily,
-		KeepWeekly:          tmpl.KeepWeekly,
-		KeepMonthly:         tmpl.KeepMonthly,
-		KeepYearly:          tmpl.KeepYearly,
-		MaxConcurrent:       tmpl.MaxConcurrent,
-		SkipNext:            tmpl.SkipNext,
-		Enabled:             false,
-		VerifyEnabled:       tmpl.VerifyEnabled,
-		VerifySampleRate:    tmpl.VerifySampleRate,
-		IsTemplate:          false,
-		PreHook:             tmpl.PreHook,
-		PostHook:            tmpl.PostHook,
-		HookTimeoutSeconds:  tmpl.HookTimeoutSeconds,
-		AppProfile:          tmpl.AppProfile,
-		AppCredentialID:     tmpl.AppCredentialID,
-		MaxExecutionSeconds: tmpl.MaxExecutionSeconds,
-		MaxRetries:          tmpl.MaxRetries,
-		RetryBaseSeconds:    tmpl.RetryBaseSeconds,
-		EscalationPolicyID:  tmpl.EscalationPolicyID,
-		DrillEnabled:        false,
-		DrillCron:           tmpl.DrillCron,
-		DrillTargetNodeID:   tmpl.DrillTargetNodeID,
-		DrillRestorePath:    tmpl.DrillRestorePath,
-		DrillPreVerify:      tmpl.DrillPreVerify,
-		DrillVerify:         tmpl.DrillVerify,
-		DrillPostVerify:     tmpl.DrillPostVerify,
-		DrillAutoCleanup:    tmpl.DrillAutoCleanup,
-	}
-
+	var newPolicy model.Policy
 	err = s.repo.Transaction(ctx, func(txRepo repository.PolicyRepository) error {
+		// The template observed before the transaction may have been undone.
+		// Re-read it after the repository's target ownership lock.
+		fresh, err := txRepo.FindByIDWithNodes(ctx, templateID)
+		if err != nil {
+			if errors.Is(err, apperr.ErrNotFound) {
+				return ErrTemplateNotFound
+			}
+			return apperr.WrapDBError(err)
+		}
+		if !fresh.IsTemplate {
+			return ErrNotTemplate
+		}
+		tmpl = fresh
+		if locker, ok := txRepo.(interface {
+			LockPolicyCloneReferences(context.Context, []model.Node, *uint) error
+		}); ok {
+			if err := locker.LockPolicyCloneReferences(ctx, tmpl.Nodes, tmpl.DrillTargetNodeID); err != nil {
+				return err
+			}
+		}
+		newPolicy = model.Policy{
+			Name:                tmpl.Name + " (副本)",
+			Description:         tmpl.Description,
+			SourcePath:          tmpl.SourcePath,
+			TargetPath:          config.BackupRoot,
+			CronSpec:            tmpl.CronSpec,
+			ExcludeRules:        tmpl.ExcludeRules,
+			BwLimit:             tmpl.BwLimit,
+			BandwidthSchedule:   tmpl.BandwidthSchedule,
+			RetentionDays:       tmpl.RetentionDays,
+			RPOMinutes:          tmpl.RPOMinutes,
+			RTOMinutes:          tmpl.RTOMinutes,
+			RetentionMode:       tmpl.RetentionMode,
+			KeepDaily:           tmpl.KeepDaily,
+			KeepWeekly:          tmpl.KeepWeekly,
+			KeepMonthly:         tmpl.KeepMonthly,
+			KeepYearly:          tmpl.KeepYearly,
+			MaxConcurrent:       tmpl.MaxConcurrent,
+			SkipNext:            tmpl.SkipNext,
+			Enabled:             false,
+			VerifyEnabled:       tmpl.VerifyEnabled,
+			VerifySampleRate:    tmpl.VerifySampleRate,
+			IsTemplate:          false,
+			PreHook:             tmpl.PreHook,
+			PostHook:            tmpl.PostHook,
+			HookTimeoutSeconds:  tmpl.HookTimeoutSeconds,
+			AppProfile:          tmpl.AppProfile,
+			AppCredentialID:     tmpl.AppCredentialID,
+			MaxExecutionSeconds: tmpl.MaxExecutionSeconds,
+			MaxRetries:          tmpl.MaxRetries,
+			RetryBaseSeconds:    tmpl.RetryBaseSeconds,
+			EscalationPolicyID:  tmpl.EscalationPolicyID,
+			DrillEnabled:        false,
+			DrillCron:           tmpl.DrillCron,
+			DrillTargetNodeID:   tmpl.DrillTargetNodeID,
+			DrillRestorePath:    tmpl.DrillRestorePath,
+			DrillPreVerify:      tmpl.DrillPreVerify,
+			DrillVerify:         tmpl.DrillVerify,
+			DrillPostVerify:     tmpl.DrillPostVerify,
+			DrillAutoCleanup:    tmpl.DrillAutoCleanup,
+		}
 		if err := txRepo.CreateWithExplicitValues(ctx, &newPolicy, model.PolicyCreateExplicitColumns()...); err != nil {
 			return apperr.WrapDBError(err)
 		}

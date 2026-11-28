@@ -612,6 +612,9 @@ func (service *PreflightService) EvaluateAndPersist(
 			validatePreflightPlanInput(lockedPlan, request.ExpectedPlanRevision, input, commitNow) != nil {
 			return ErrRecoveryPreflightConflict
 		}
+		if err := lockRecoveryAuthorityRepositoryTx(ctx, tx, lockedPlan.RepositoryID); err != nil {
+			return err
+		}
 		if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, lockedPlan); err != nil {
 			if errors.Is(err, ErrRecoverySourceChanged) || errors.Is(err, ErrInvalidRecoveryPlan) {
 				return ErrRecoveryPreflightConflict

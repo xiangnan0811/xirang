@@ -17,6 +17,7 @@ import {
 import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { toast } from "@/components/ui/toast-sonner";
 import { apiClient } from "@/lib/api/client";
+import { createEscalationApi } from "@/lib/api/escalation";
 import {
   parseSLOTags,
   type SLOInput,
@@ -24,6 +25,8 @@ import {
 import { getErrorMessage } from "@/lib/utils";
 import { useConfirm } from "@/hooks/use-confirm";
 import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOMetricType, SLOSummary } from "@/types/domain";
+
+const escalationApi = createEscalationApi();
 
 const METRIC_TYPES = [
   { value: "success_rate", i18nKey: "slo.metricType.successRate" },
@@ -310,7 +313,7 @@ function SLODialogSession({
 
   useEffect(() => {
     if (!open || !token) return;
-    apiClient.listEscalationPolicies(token)
+    escalationApi.listEscalationPolicies(token)
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
   }, [open, token]);

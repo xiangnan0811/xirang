@@ -57,6 +57,12 @@ func (authority *recoveryEligibilityTargetRootAuthority) CaptureRecoveryEligibil
 	if err := recoveryEligibilityTargetRootCallValid(authority, ctx, tx); err != nil {
 		return RecoveryEligibilityTargetRootSnapshot{}, err
 	}
+	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
+		ctx, tx, binding.TargetNodeID, TargetPurposePreflight,
+	)
+	if err != nil {
+		return RecoveryEligibilityTargetRootSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
+	}
 	if err := lockRecoveryEligibilityTargetRootRowTx(
 		ctx, tx, binding.TargetNodeID, binding.TargetRootID,
 	); err != nil {
@@ -64,12 +70,6 @@ func (authority *recoveryEligibilityTargetRootAuthority) CaptureRecoveryEligibil
 	}
 	root, err := authority.registry.ResolveRecoveryTargetRootTx(
 		ctx, tx, binding.TargetNodeID, binding.TargetRootID,
-	)
-	if err != nil {
-		return RecoveryEligibilityTargetRootSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
-	}
-	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
-		ctx, tx, binding.TargetNodeID, TargetPurposePreflight,
 	)
 	if err != nil {
 		return RecoveryEligibilityTargetRootSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
@@ -98,6 +98,12 @@ func (authority *recoveryEligibilityTargetRootAuthority) RevalidateRecoveryEligi
 		!recoveryEligibilityTargetRootMatchesBinding(binding, captured) {
 		return ErrRecoveryTargetChanged
 	}
+	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
+		ctx, tx, binding.TargetNodeID, TargetPurposePreflight,
+	)
+	if err != nil {
+		return recoveryEligibilityTargetRootChanged(ctx)
+	}
 	if err := lockRecoveryEligibilityTargetRootRowTx(
 		ctx, tx, binding.TargetNodeID, binding.TargetRootID,
 	); err != nil {
@@ -105,12 +111,6 @@ func (authority *recoveryEligibilityTargetRootAuthority) RevalidateRecoveryEligi
 	}
 	root, err := authority.registry.ResolveRecoveryTargetRootTx(
 		ctx, tx, binding.TargetNodeID, binding.TargetRootID,
-	)
-	if err != nil {
-		return recoveryEligibilityTargetRootChanged(ctx)
-	}
-	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
-		ctx, tx, binding.TargetNodeID, TargetPurposePreflight,
 	)
 	if err != nil {
 		return recoveryEligibilityTargetRootChanged(ctx)
@@ -133,16 +133,16 @@ func (authority *recoveryEligibilityTargetRootAuthority) ResolveRecoveryReconcil
 		nodeID == 0 || strings.TrimSpace(rootID) == "" || strings.TrimSpace(rootID) != rootID {
 		return RecoveryReconciliationRevisionSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
 	}
+	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
+		ctx, tx, nodeID, TargetPurposeReconcile,
+	)
+	if err != nil {
+		return RecoveryReconciliationRevisionSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
+	}
 	if err := lockRecoveryEligibilityTargetRootRowTx(ctx, tx, nodeID, rootID); err != nil {
 		return RecoveryReconciliationRevisionSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
 	}
 	root, err := authority.registry.ResolveRecoveryTargetRootTx(ctx, tx, nodeID, rootID)
-	if err != nil {
-		return RecoveryReconciliationRevisionSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
-	}
-	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(
-		ctx, tx, nodeID, TargetPurposeReconcile,
-	)
 	if err != nil {
 		return RecoveryReconciliationRevisionSnapshot{}, recoveryEligibilityTargetRootUnavailable(ctx)
 	}
@@ -161,6 +161,7 @@ func (authority *recoveryEligibilityTargetRootAuthority) ResolveRecoveryReconcil
 	return result, nil
 }
 
+// Callers must lock the node and credential revisions before the target root row.
 func lockRecoveryEligibilityTargetRootRowTx(
 	ctx context.Context,
 	tx *gorm.DB,

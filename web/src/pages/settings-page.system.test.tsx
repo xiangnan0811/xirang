@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { SystemTab } from "./settings-page.system";
 
-const apiClientMock = vi.hoisted(() => ({
+const settingsApiMock = vi.hoisted(() => ({
   getSettings: vi.fn(),
   getSecurityRiskSummary: vi.fn(),
   updateSettings: vi.fn(),
@@ -13,8 +13,8 @@ vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
-vi.mock("@/lib/api/client", () => ({
-  apiClient: apiClientMock,
+vi.mock("@/lib/api/settings-api", () => ({
+  createSettingsApi: () => settingsApiMock,
 }));
 
 vi.mock("react-i18next", () => ({
@@ -44,8 +44,8 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 describe("SystemTab security risk summary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiClientMock.getSettings.mockResolvedValue({ definitions: [], values: {} });
-    apiClientMock.getSecurityRiskSummary.mockResolvedValue({
+    settingsApiMock.getSettings.mockResolvedValue({ definitions: [], values: {} });
+    settingsApiMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
       summary: { totalRisks: 19, categories: 9 },
       items: [
@@ -132,7 +132,7 @@ describe("SystemTab security risk summary", () => {
       expect(screen.getByRole("heading", { name: "settings.system.securityRisk.title" })).toBeInTheDocument();
     });
     const riskSummaryTitle = screen.getByRole("heading", { name: "settings.system.securityRisk.title" });
-    expect(apiClientMock.getSecurityRiskSummary).toHaveBeenCalledWith("test-token");
+    expect(settingsApiMock.getSecurityRiskSummary).toHaveBeenCalledWith("test-token");
     expect(screen.getByRole("heading", { name: "Root SSH users" })).toBeInTheDocument();
     expect(screen.getByText("node-a")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Broad scope SSH keys" })).toBeInTheDocument();

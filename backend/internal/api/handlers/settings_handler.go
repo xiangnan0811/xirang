@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -109,19 +111,6 @@ func (h *SettingsHandler) WithBackupAssetTransitioner(transitioner publication.F
 	return h
 }
 
-func transitionBackupAssetSettingsMutation(
-	ctx context.Context,
-	svc *settings.Service,
-	transitioner publication.FeatureTransitioner,
-	current map[string]string,
-	overlay map[string]string,
-	persist func(context.Context) error,
-) error {
-	return transitionBackupAssetSettingsMutationWithRestore(
-		ctx, svc, transitioner, current, overlay, persist, nil,
-	)
-}
-
 func transitionBackupAssetSettingsMutationWithRestore(
 	ctx context.Context,
 	svc *settings.Service,
@@ -217,6 +206,33 @@ func copyBackupAssetSettings(values map[string]string) map[string]string {
 		result[key] = value
 	}
 	return result
+}
+
+// settingReceiptCallbacks keeps a failed restore terminal: runtime cleanup can
+// re-enter it through nested transitions, but a conflict must never be retried.
+func settingReceiptCallbacks(
+	svc *settings.Service,
+	mutation func(context.Context) (*settings.SettingOverrideReceipt, error),
+) (func(context.Context) error, func(context.Context) error) {
+	var receipt *settings.SettingOverrideReceipt
+	var persistErr error
+	persist := func(ctx context.Context) error {
+		receipt, persistErr = mutation(ctx)
+		return persistErr
+	}
+	var once sync.Once
+	var restoreErr error
+	restore := func(ctx context.Context) error {
+		once.Do(func() {
+			if receipt != nil {
+				restoreErr = svc.RestoreTransitionOverridesContext(ctx, receipt)
+			} else if errors.Is(persistErr, settings.ErrSettingOverrideCommitUncertain) {
+				restoreErr = persistErr
+			}
+		})
+		return restoreErr
+	}
+	return persist, restore
 }
 
 // GetAll godoc
@@ -369,39 +385,35 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 	if h == nil || h.db == nil || h.svc == nil {
 		return fmt.Errorf("settings handler is unavailable")
 	}
-	containsFoundation := false
 	foundationOverlay := make(map[string]string)
 	for key, value := range values {
 		if settings.IsBackupAssetFoundationSetting(key) {
-			containsFoundation = true
 			foundationOverlay[key] = value
 		}
 	}
-	persist := func(persistCtx context.Context) error {
-		return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
-			for key, value := range values {
-				if err := h.svc.UpdateWithTxContext(persistCtx, tx, key, value); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	}
-	if !containsFoundation {
-		return persist(ctx)
-	}
-	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+	if len(foundationOverlay) == 0 {
 		keys := make([]string, 0, len(values))
 		for key := range values {
 			keys = append(keys, key)
 		}
-		overrides, err := h.svc.CaptureSettingOverridesContext(ctx, keys)
-		if err != nil {
+		sort.Strings(keys)
+		if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for _, key := range keys {
+				if err := h.svc.UpdateWithTxContext(ctx, tx, key, values[key]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		restore := func(restoreCtx context.Context) error {
-			return h.svc.RestoreSettingOverridesContext(restoreCtx, overrides)
-		}
+		h.svc.InvalidateCachedValues(keys)
+		return nil
+	}
+	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+		persist, restore := settingReceiptCallbacks(h.svc, func(persistCtx context.Context) (*settings.SettingOverrideReceipt, error) {
+			return h.svc.UpdateTransitionOverridesContext(persistCtx, current, values)
+		})
 		return transitionBackupAssetSettingsMutationWithRestore(
 			ctx, h.svc, h.transitioner, current, foundationOverlay, persist, restore,
 		)
@@ -421,12 +433,10 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 			return wrapSettingsValidation(err)
 		}
 		override := map[string]string{key: fallback}
-		persist := func(persistCtx context.Context) error {
-			return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
-				return h.svc.DeleteWithTxContext(persistCtx, tx, key)
-			})
-		}
-		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, override, persist)
+		persist, restore := settingReceiptCallbacks(h.svc, func(persistCtx context.Context) (*settings.SettingOverrideReceipt, error) {
+			return h.svc.DeleteTransitionOverrideContext(persistCtx, current, key)
+		})
+		return transitionBackupAssetSettingsMutationWithRestore(ctx, h.svc, h.transitioner, current, override, persist, restore)
 	})
 }
 

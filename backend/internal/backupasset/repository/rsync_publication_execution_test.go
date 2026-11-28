@@ -1232,6 +1232,11 @@ type rsyncPublicationFixture struct {
 func newRsyncPublicationFixture(t *testing.T) *rsyncPublicationFixture {
 	t.Helper()
 	db := newRepositoryTestDB(t)
+	return newRsyncPublicationFixtureWithDB(t, db)
+}
+
+func newRsyncPublicationFixtureWithDB(t *testing.T, db *gorm.DB) *rsyncPublicationFixture {
+	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	legacyTarget := t.TempDir()
 	taskEntity := seedTask(t, db, "rsync", legacyTarget, "")

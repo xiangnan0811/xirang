@@ -20,7 +20,6 @@ import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { EscalationLevelRow, type EscalationLevelRowErrors } from "./escalation-level-row";
 import { EscalationDraftPreview } from "./escalation-preview";
 import { createIntegrationsApi } from "@/lib/api/integrations-api";
-import { apiClient } from "@/lib/api/client";
 import {
   getAuthIdentitySnapshot,
   getAuthSessionGeneration,
@@ -28,12 +27,13 @@ import {
   subscribeAuthSessionGeneration,
   subscribeAuthTransition,
 } from "@/lib/api/core";
-import type { EscalationPolicyInput } from "@/lib/api/escalation";
+import { createEscalationApi, type EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { EscalationLevel, EscalationPolicy, IntegrationChannel } from "@/types/domain";
 
 const intApi = createIntegrationsApi();
+const escalationApi = createEscalationApi();
 
 const MAX_LEVELS = 5;
 
@@ -306,8 +306,8 @@ function EscalationPolicySession({
     try {
       const saved =
         isEdit && policy
-          ? await apiClient.updateEscalationPolicy(token, policy.id, input)
-          : await apiClient.createEscalationPolicy(token, input);
+          ? await escalationApi.updateEscalationPolicy(token, policy.id, input)
+          : await escalationApi.createEscalationPolicy(token, input);
 
       if (!mountedRef.current || saveAttemptRef.current !== attempt) return;
       savePendingRef.current = false;

@@ -724,3 +724,9 @@ Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并
 Core `rsync` 显式 root 从 `3.5.0-r0` 更新为 Alpine 3.23 的 `3.5.2-r1`，修复 Trivy 报告的 `CVE-2026-119741`；扫描修复门槛 `3.5.2-r0` 与当前两架构可采集的后续修订 `r1` 分别记录。采用同一成功原生采集 run 的 lock、八份 manifest 与 Worker 投影，并核对 exact source SHA／指定 workflow 的 provenance，不手填 digest。
 
 该次全事务重新解析使 Worker 两架构的传递 `glib` 从 `2.86.3-r0` 更新为 `2.86.5-r0`，其他包、基础镜像、安装器及可信密钥保持。显式 root 列表未变，glib 的完整 APK 字节和安装版本由生成的 `production_apk_inputs.json` 对应 manifest 身份覆盖；不为了复制传递版本而新增 root 或手工指纹。真实 Worker 输入变化会推进 toolchain／pipeline 指纹，须同源重建 Core／Worker、重新生成双架构最终闭包及签名配套制品，不能把 Core 起因概括成 Worker 不变。升级和回退边界见发布手册。
+
+### Core 和 Worker 的 libxml2 安全更新
+
+[原生双架构采集](https://github.com/xiangnan0811/xirang/actions/runs/46144546165) 在配方 `49525856a70c036a2f8f1adcff35c306d1873209` 上完成八个事务的签名验证、断网重放与安装后扫描。采用前验证 lock 的构建来源与该次工作流签名。Core 的显式根和 Worker 的传递项均安装 `libxml2=2.13.9-r2`，修复此前产品扫描阻断的 `2.13.9-r1`。两架构的基础镜像、安装器、可信密钥与安装前清单相同。
+
+软件源已下架的精确版本锁一并更新，两种运行时的 `libcrypto3` 和 `libssl3` 升至 `3.5.9-r1`，Expat 升至 `2.11.0-r0`，Worker 的 Zstd 升至 `1.6.0-r1`。实际重采还更新了两个 builder 和 Worker 的传递 `zstd-libs`、supercronic-builder 的传递 Expat，以及 Worker 的 `gnutls`、`libffi` 和 `mbedtls`。完整清单和 Worker 投影来自同一签名候选，Worker 工具链与 pipeline 身份随之更新。最终产品的双架构构建、扫描、闭包及签名包验证仍由产品 CI 执行。

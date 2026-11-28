@@ -38,7 +38,6 @@ export type NodesPageDialogsProps = Pick<
   | "sshKeys"
   | "editorOpen"
   | "handleEditorOpenChange"
-  | "nodeEditorOnCloseAutoFocus"
   | "editingNode"
   | "terminalNode"
   | "setTerminalNode"
@@ -51,7 +50,6 @@ export type NodesPageDialogsProps = Pick<
   | "runDoctorForNode"
   | "fileBrowserNode"
   | "setFileBrowserNode"
-  | "fileBrowserOnCloseAutoFocus"
   | "fileBrowserTab"
   | "canBrowseNodeFiles"
   | "setFileBrowserTab"
@@ -67,6 +65,7 @@ export type NodesPageDialogsProps = Pick<
   | "dialog"
   | "refreshNodes"
   | "handleSaveNode"
+  | "reloadEditingNode"
   | "handleTestConnection"
   | "isAdmin"
   | "canOperateNodes"
@@ -79,7 +78,10 @@ export type NodesPageDialogsProps = Pick<
 > & {
   doctorConnectionNavigationAvailable: boolean;
   onDoctorNavigateConnection: () => boolean;
+  nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus;
+  fileBrowserOnCloseAutoFocus: DialogCloseAutoFocus;
   doctorOnCloseAutoFocus?: DialogCloseAutoFocus;
+  terminalOnCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function NodesPageDialogs({
@@ -102,6 +104,7 @@ export function NodesPageDialogs({
   doctorConnectionNavigationAvailable,
   onDoctorNavigateConnection,
   doctorOnCloseAutoFocus,
+  terminalOnCloseAutoFocus,
   fileBrowserNode,
   setFileBrowserNode,
   fileBrowserOnCloseAutoFocus,
@@ -120,6 +123,7 @@ export function NodesPageDialogs({
   dialog,
   refreshNodes,
   handleSaveNode,
+  reloadEditingNode,
   handleTestConnection,
   isAdmin,
   canOperateNodes,
@@ -143,6 +147,7 @@ export function NodesPageDialogs({
             editingNode={editingNode}
             sshKeys={sshKeys}
             onSave={handleSaveNode}
+            onReloadNode={reloadEditingNode}
             onTestConnection={handleTestConnection}
           />
         </Suspense>
@@ -156,6 +161,7 @@ export function NodesPageDialogs({
           className="w-full max-w-[95vw] md:max-w-[90vw] h-[85vh] flex flex-col gap-0 p-0 resize overflow-hidden"
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
+          onCloseAutoFocus={terminalOnCloseAutoFocus}
         >
           <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <DialogTitle className="flex items-center justify-between">
@@ -246,12 +252,10 @@ export function NodesPageDialogs({
               <ErrorBoundary>
                 {fileBrowserTab === "files" ? (
                   <FileBrowser
-                    rootPath={
-                      fileBrowserNode.basePath && fileBrowserNode.basePath !== "/"
-                        ? fileBrowserNode.basePath
-                        : fileBrowserNode.username === "root"
-                          ? "/root"
-                          : `/home/${fileBrowserNode.username}`
+                    // A new node is a new browsing session; never carry entries or root across nodes.
+                    key={fileBrowserNode.id}
+                    fetchInitialDir={(signal) =>
+                      filesApi.listNodeInitialFiles(token, fileBrowserNode.id, { signal })
                     }
                     fetchDir={(path, signal) =>
                       filesApi.listNodeFiles(token, fileBrowserNode.id, path, { signal })

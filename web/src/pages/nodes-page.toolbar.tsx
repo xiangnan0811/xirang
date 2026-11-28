@@ -36,6 +36,7 @@ export type NodesPageToolbarProps = Omit<
     | "handleExportCSV"
     | "handleDownloadTemplate"
     | "setBatchCmdOpen"
+    | "hasActiveFilters"
     | "resetFilters"
     | "isAdmin"
     | "canOperateNodes"
@@ -60,6 +61,7 @@ export function NodesPageToolbar({
   handleExportCSV,
   handleDownloadTemplate,
   setBatchCmdOpen,
+  hasActiveFilters,
   resetFilters,
   isAdmin,
   canOperateNodes,
@@ -142,31 +144,39 @@ export function NodesPageToolbar({
       <ViewModeToggle
         className="hidden md:inline-flex"
         value={viewMode}
-        onChange={setViewMode}
+        onChange={(nextMode) => {
+          // 选择卡片/列表即退出分组视图，否则分组下切换没有可见效果。
+          if (groupView) {
+            setGroupView(false);
+          }
+          setViewMode(nextMode);
+        }}
         groupLabel={t("nodes.viewToggleGroup")}
         cardsButtonLabel={t("nodes.viewCards")}
         listButtonLabel={t("nodes.viewList")}
       />
+      {/* 分组在所有宽度可切换：分组状态会持久化，小屏也必须能退出。 */}
       <Button
         size="sm"
         variant={groupView ? "default" : "outline"}
-        className="hidden shrink-0 md:inline-flex"
+        className="shrink-0"
         onClick={() => setGroupView(!groupView)}
-        aria-label={t("nodes.groupByTag")}
+        aria-pressed={groupView}
+        title={t("nodes.groupByTag")}
       >
-        <Layers className="mr-1 size-3.5" />
+        <Layers className="mr-1 size-3.5" aria-hidden />
         {t("nodes.groupLabel")}
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="sm" variant="outline" aria-label={t("nodes.batchLabel")}>
-            <MoreHorizontal className="mr-1 size-4" />
+          <Button size="sm" variant="outline">
+            <MoreHorizontal className="mr-1 size-4" aria-hidden />
             {selectedNodeIds.length > 0 ? t("nodes.batchWithCount", { count: selectedNodeIds.length }) : t("nodes.batchLabel")}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={() => toggleSelectAllVisible(!allVisibleSelected)}>
-            <CheckSquare className="mr-2 size-4" />
+            <CheckSquare className="mr-2 size-4" aria-hidden />
             {allVisibleSelected ? t("nodes.deselectAll") : t("nodes.selectAllFiltered")}
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -181,7 +191,7 @@ export function NodesPageToolbar({
               disabled={!selectedNodeIds.length}
               onClick={() => setBatchCmdOpen(true)}
             >
-              <Terminal className="mr-2 size-3.5" />
+              <Terminal className="mr-2 size-3.5" aria-hidden />
               {t("nodes.batchCommandCount", { count: selectedNodeIds.length })}
             </DropdownMenuItem>
           )}
@@ -192,13 +202,13 @@ export function NodesPageToolbar({
               className="text-destructive focus:text-destructive"
               onClick={() => void handleBulkDelete()}
             >
-              <Trash2 className="mr-2 size-3.5" />
+              <Trash2 className="mr-2 size-3.5" aria-hidden />
               {t("nodes.deleteCount", { count: selectedNodeIds.length })}
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button size="sm" variant="outline" onClick={resetFilters}>
+      <Button size="sm" variant="outline" disabled={!hasActiveFilters} onClick={resetFilters}>
         {t("nodes.reset")}
       </Button>
     </div>

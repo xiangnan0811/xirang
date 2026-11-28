@@ -373,8 +373,8 @@ export function TaskEditorDialog({
       <TaskAdvanced
         draft={draft}
         setDraft={setDraft}
-        nodes={nodes}
         isEditing={isEditing}
+        savedTarget={editingTask?.rsyncTarget}
         managedRclone={managedRclone}
       />
     </FormDialog>

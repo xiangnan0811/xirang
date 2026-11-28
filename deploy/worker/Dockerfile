@@ -1,6 +1,6 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:5735759a76f2ed5e1db26c293bc38f0e4cb5af2204533fd2ecbd6c0f2fb4c66b AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:dcca9d5512c908c78056134d93da72524b9b7b4b505f59367901919159a1678c AS worker-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:afa9bde5a6fbb4cde343cbec2d84b7b71849b4248fe188217e4395b1144117cf AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:cb232b0332e9e00794c7e4d4fb20214c9e390e2f9b8d57d520fa4c5543b93b34 AS worker-runtime-inputs
 
 # Retained golang:1.27.4-alpine3.24 platform images; upstream identities are in the lock.
 FROM docker.io/linnea7171/xirang@sha256:adf296efebd945f153f77f6fe1b7806be3f50f09c7edbc4f815deb8cb1932da4 AS worker-builder
@@ -44,10 +44,10 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       font-noto-cjk=0_git20220127-r1 \
       font-noto=2026.11.01-r0 \
       gzip=1.14-r3 \
-      libcrypto3=3.5.9-r0 \
-      libexpat=2.10.0-r0 \
+      libcrypto3=3.5.9-r1 \
+      libexpat=2.11.0-r0 \
       libreoffice=25.8.1.1-r5 \
-      libssl3=3.5.9-r0 \
+      libssl3=3.5.9-r1 \
       musl-utils=1.2.5-r24 \
       musl=1.2.5-r24 \
       poppler-utils=25.12.0-r0 \
@@ -58,7 +58,7 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       vips-tools=8.17.3-r1 \
       xz=5.8.4-r0 \
       zlib=1.4-r0 \
-      zstd=1.5.7-r2
+      zstd=1.6.0-r1
 
 RUN addgroup -S -g 10000 asset-worker && \
 	    adduser -S -D -H -u 10000 -G asset-worker -s /sbin/nologin asset-worker && \

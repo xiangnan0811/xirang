@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
-import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { formatTime } from "@/lib/date-utils";
 import { cn, getErrorMessage } from "@/lib/utils";
-import type { SecurityRiskItem, SecurityRiskSummary, SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
+import { createSettingsApi, type SecurityRiskItem, type SecurityRiskSummary, type SettingDef, type ResolvedSetting } from "@/lib/api/settings-api";
+
+const settingsApi = createSettingsApi();
 
 const CATEGORY_ORDER = ["security", "node_monitor", "retention", "storage", "alert", "anomaly"];
 
@@ -56,8 +57,8 @@ function SystemTabContent() {
   const loadSettings = useCallback((signal?: AbortSignal) => {
     if (!token) return;
     return Promise.allSettled([
-      apiClient.getSettings(token),
-      apiClient.getSecurityRiskSummary(token),
+      settingsApi.getSettings(token),
+      settingsApi.getSecurityRiskSummary(token),
     ]).then(([settingsResult, riskResult]) => {
       if (signal?.aborted) return;
       if (settingsResult.status === "fulfilled") {
@@ -103,7 +104,7 @@ function SystemTabContent() {
       return;
     }
     try {
-      await apiClient.updateSettings(token, changes);
+      await settingsApi.updateSettings(token, changes);
       setMessage({ type: "success", text: t("settings.system.saved") });
       await loadSettings();
     } catch (err: unknown) {
@@ -117,7 +118,7 @@ function SystemTabContent() {
   const handleReset = async (key: string) => {
     if (!token) return;
     try {
-      await apiClient.resetSetting(token, key);
+      await settingsApi.resetSetting(token, key);
       await loadSettings();
     } catch { /* ignore */ }
   };

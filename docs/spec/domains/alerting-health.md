@@ -292,6 +292,18 @@ SLO 仅接受任务 `success_rate`，不接受 `availability`。异常仅保留 
 及其 Sigma、事件保留和通知链；不接受 EWMA/disk_forecast 查询筛选。报表保留任务结果、
 RPO/RTO，移除 DiskTrend。到期提醒和维护窗口保持原有边界。
 
+节点创建及更新的 `status` 只接受 `online`、`warning`、`offline` 三个非空字符串，区分大小写。省略、传入 `null` 或空字符串时，新节点使用 `offline`，更新保留原状态，包括历史数据中的其他值。明确提交其他字符串时返回 400，节点配置不写入。
+
+连接测试结果与节点配置分别维护。节点清单和属性页标明上次手动测试的结果和适用配置，
+不会据此推断实时在线状态或生成周期探测告警。探测受理、结果匹配及历史展示见
+[凭据与访问合同](credentials-access.md#ssh-主机密钥信任)。
+
+节点创建与更新接受可选的 `maintenance_start`、`maintenance_end` 和 `expiry_date` 字符串。省略或传入 `null` 时，创建不设置该值，更新保留原值。空字符串清除；其他值必须可按 RFC3339 解析，错误返回 400 且节点配置不写入。新写入的时间以 UTC 和微秒精度保存，小数秒超出部分向下截断。到期时间独立于维护窗口，可设置为过去的时刻。
+
+新值转换到 UTC 后的年份必须在 `0000` 至 `9999` 之间。节点及嵌套节点的响应以 UTC 输出这些时间，不受数据库连接时区影响。历史值若只能以原偏移表达，则保留该偏移。
+
+更新维护窗口时，在节点写锁内把提交的端点与当前已存值合并。变更后的窗口必须两端皆空，或两端齐全且结束时刻在微秒精度上严格晚于开始。按同一时刻重复提交等同于保留原值，未更改的历史不完整或倒序窗口不会阻止无关编辑。前端省略未修改的端点，并按已存的实际时刻校验另一个端点。
+
 `GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`（只统计启用且非模板的策略 `enabled=true AND is_template=false`；前端无摘要回退时仅在策略列表已加载后按非模板策略统计，未加载时保持未知 `null` 而不伪造为 `0`）。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。`/overview/backup-health` 的 `summary.total_policies` 与 `degraded_policies` 返回仅针对启用非模板策略的统计，并同时暴露当前可见节点范围的 `latest_verified_backup_at` 与有效阈值 `stale_threshold_hours`。
 
 operator 的降级策略必须仍关联其当前拥有的节点，评估连续失败时只读取归属其当前可见节点快照的运行。七天趋势按服务端时区的本地日历日分桶，各日使用相邻两个午夜作为半开区间。

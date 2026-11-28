@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiClient } from "@/lib/api/client";
+import { NodeConnectionEvidenceNote } from "@/components/node-connection-evidence";
+import {
+  describeNodeConnectionEvidence,
+  formatNodeConnectionLatency,
+  getNodeLastTestStatus,
+  getNodeStatusMeta,
+} from "@/lib/status";
 import type { NodeRecord } from "@/types/domain";
-import type { NodeDetailTabProps } from "./types";
+
+type ProfileTabProps = {
+  /** Exact-id record from the page-level `useNodeRecord`; archived nodes included. */
+  node: NodeRecord | null;
+  isLoading: boolean;
+  /** Record request failed for a reason other than 404. */
+  loadFailed: boolean;
+};
 
 function formatRecordedTime(value: string): string {
   if (!value || value === "-") {
@@ -12,66 +24,29 @@ function formatRecordedTime(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
+export default function ProfileTab({ node, isLoading, loadFailed }: ProfileTabProps) {
   const { t } = useTranslation();
-  const [node, setNode] = useState<NodeRecord | null>(null);
-  // Start loading when we expect a fetch so stale content cannot paint first frame.
-  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
-  const [error, setError] = useState(false);
-  // nodeId that `node` was loaded for — ignore mismatched stale state.
-  const [loadedForId, setLoadedForId] = useState<number | null>(null);
-  const [scope, setScope] = useState({ nodeId, token });
-  if (scope.nodeId !== nodeId || scope.token !== token) {
-    setScope({ nodeId, token });
-    setNode(null);
-    setLoadedForId(null);
-    setError(false);
-    setLoading(Boolean(token && nodeId > 0));
-  }
 
-  const fetchNode = useCallback((signal: AbortSignal) => {
-    if (!token || nodeId <= 0) return;
-    return apiClient.getNodes(token, { signal }).then((rows) => {
-      if (!signal.aborted) {
-        setNode(rows.find((n) => n.id === nodeId) ?? null);
-        setLoadedForId(nodeId);
-      }
-    }).catch(() => {
-      if (!signal.aborted) {
-        setNode(null);
-        setLoadedForId(nodeId);
-        setError(true);
-      }
-    }).finally(() => {
-      if (!signal.aborted) setLoading(false);
-    });
-  }, [nodeId, token]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchNode(controller.signal);
-    return () => controller.abort();
-  }, [fetchNode, nodeId, token]);
-
-  if (loading || (token && nodeId > 0 && loadedForId !== nodeId && !error)) {
+  if (isLoading) {
     return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.loading")}</p>;
   }
-  if (error) {
+  if (loadFailed) {
     return (
       <p className="text-sm text-destructive" role="alert">
         {t("nodes.nodeDetail.profileError")}
       </p>
     );
   }
-  if (node == null || node.id !== nodeId || loadedForId !== nodeId) {
+  if (node == null) {
     return <p className="text-sm text-muted-foreground">{t("nodes.nodeDetail.profileNotFound")}</p>;
   }
+  const evidence = describeNodeConnectionEvidence(node);
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2" data-testid="profile-tab">
       <section className="rounded-md border border-border bg-card p-4">
         <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileBasic")}</h3>
-        <dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-2 text-sm">
+        <dl className="mt-3 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-sm">
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileName")}</dt>
           <dd>{node.name}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileAddress")}</dt>
@@ -81,9 +56,7 @@ export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileUsername")}</dt>
           <dd>{node.username}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileTags")}</dt>
-          <dd>{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileStatus")}</dt>
-          <dd>{node.status}</dd>
+          <dd className="min-w-0 [overflow-wrap:anywhere]">{node.tags.length > 0 ? node.tags.join(", ") : "-"}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileBackupDir")}</dt>
           <dd>{node.backupDir || "-"}</dd>
         </dl>
@@ -91,15 +64,18 @@ export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
 
       <section className="rounded-md border border-border bg-card p-4">
         <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileTimeMaint")}</h3>
-        <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastSeen")}</dt>
-          <dd>{formatRecordedTime(node.lastSeenAt)}</dd>
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLatency")}</dt>
-          <dd>{node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-"}</dd>
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
-          <dd>
-            {node.lastBackupAt ? new Date(node.lastBackupAt).toLocaleString() : "-"}
+        <dl className="mt-3 grid grid-cols-[140px_1fr] gap-x-3 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastTestResult")}</dt>
+          <dd className="min-w-0">
+            <span>{getNodeStatusMeta(getNodeLastTestStatus(node)).label}</span>
+            <NodeConnectionEvidenceNote evidence={evidence} className="mt-0.5" />
           </dd>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastSeen")}</dt>
+          <dd>{formatRecordedTime(evidence.testedAt ?? "")}</dd>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLatency")}</dt>
+          <dd>{formatNodeConnectionLatency(evidence)}</dd>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
+          <dd>{formatRecordedTime(node.lastBackupAt)}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileMaintWindow")}</dt>
           <dd>
             {node.maintenanceStart || node.maintenanceEnd

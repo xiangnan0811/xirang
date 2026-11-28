@@ -133,10 +133,9 @@ type configImportWarningKey struct {
 }
 
 type configImportAccumulator struct {
-	result           configImportResult
-	warningKeys      map[configImportWarningKey]struct{}
-	createdNodeIDs   map[uint]struct{}
-	createdSSHKeyIDs map[uint]struct{}
+	result      configImportResult
+	warningKeys map[configImportWarningKey]struct{}
+	writtenIDs  map[string]map[string]any
 }
 
 func newConfigImportAccumulator() *configImportAccumulator {
@@ -144,22 +143,33 @@ func newConfigImportAccumulator() *configImportAccumulator {
 		result: configImportResult{
 			Warnings: make([]configImportWarning, 0, configImportWarningLimit),
 		},
-		warningKeys:      make(map[configImportWarningKey]struct{}),
-		createdNodeIDs:   make(map[uint]struct{}),
-		createdSSHKeyIDs: make(map[uint]struct{}),
+		warningKeys: make(map[configImportWarningKey]struct{}),
+		writtenIDs:  make(map[string]map[string]any),
 	}
 }
 
-func (a *configImportAccumulator) recordCreatedID(entity string, id uint) {
-	if a == nil || id == 0 {
+func (a *configImportAccumulator) recordWrite(entity string, id any) {
+	if a == nil || id == nil {
 		return
 	}
-	switch entity {
-	case configImportEntityNodes:
-		a.createdNodeIDs[id] = struct{}{}
-	case configImportEntitySSHKeys:
-		a.createdSSHKeyIDs[id] = struct{}{}
+	if a.writtenIDs == nil {
+		a.writtenIDs = make(map[string]map[string]any)
 	}
+	if a.writtenIDs[entity] == nil {
+		a.writtenIDs[entity] = make(map[string]any)
+	}
+	a.writtenIDs[entity][rawConfigImportKey(id)] = id
+}
+
+func (a *configImportAccumulator) rollbackIDs(entity string) []any {
+	if a == nil {
+		return nil
+	}
+	ids := make([]any, 0, len(a.writtenIDs[entity]))
+	for _, id := range a.writtenIDs[entity] {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (a *configImportAccumulator) warning(entity string, index int, name, code string) {
@@ -652,7 +662,7 @@ type importValidationError struct {
 	Message  string `json:"message"`
 }
 
-// validateNodeImportData 校验导入的节点数据：host 有效且无可疑地址，base_path 为绝对路径。
+// validateNodeImportData 校验导入的节点 host 和显式 base_path。
 func validateNodeImportData(nodeData map[string]interface{}, idx int) []importValidationError {
 	var errs []importValidationError
 	name, _ := nodeData["name"].(string)
@@ -672,8 +682,15 @@ func validateNodeImportData(nodeData map[string]interface{}, idx int) []importVa
 		})
 	}
 
-	if basePath, ok := nodeData["base_path"].(string); ok && basePath != "" {
-		if err := validateImportPath(basePath); err != nil {
+	if value, present := nodeData["base_path"]; present && value != nil {
+		basePath, ok := value.(string)
+		var err error
+		if !ok {
+			err = errors.New("base_path 必须是字符串或 null")
+		} else {
+			err = node.ValidateBasePath(basePath)
+		}
+		if err != nil {
 			errs = append(errs, importValidationError{
 				Resource: "nodes",
 				Index:    idx,

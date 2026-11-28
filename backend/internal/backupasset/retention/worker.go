@@ -597,20 +597,25 @@ func (service *PurgeService) Preview(ctx context.Context, request PreviewPurgeRe
 	if backupasset.ValidateOpaqueID(request.RepositoryID) != nil {
 		return PurgePlanView{}, fmt.Errorf("%w: invalid explicit purge plan", backupasset.ErrInvalidState)
 	}
+	items := request.Items
+	revisionMode := purgeExactRevisions
+	if len(request.RecoveryPointIDs) > 0 {
+		var err error
+		items, err = purgeItemsFromIDs(request.RecoveryPointIDs)
+		if err != nil {
+			return PurgePlanView{}, err
+		}
+		revisionMode = purgeCurrentRevisions
+	} else if err := validatePurgePlanItems(request.RepositoryID, items); err != nil {
+		return PurgePlanView{}, err
+	}
 	now := service.coordinator.now().UTC()
 	var view PurgePlanView
 	err := service.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		items := request.Items
-		if len(request.RecoveryPointIDs) > 0 {
-			resolved, resolveErr := service.lockPurgeItemsByIDsTx(tx, request.RepositoryID, request.RecoveryPointIDs)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			items = resolved
-		} else if err := validatePurgePlanItems(request.RepositoryID, items); err != nil {
+		if err := lockRetentionRepositoryTx(ctx, tx, request.RepositoryID); err != nil {
 			return err
 		}
-		impact, err := service.lockPurgeImpactTx(ctx, tx, request.RepositoryID, items, now, "")
+		impact, err := service.lockPurgeImpactTx(ctx, tx, request.RepositoryID, items, now, "", revisionMode)
 		if err != nil {
 			return err
 		}
@@ -644,7 +649,10 @@ func (service *PurgeService) CreatePlan(ctx context.Context, request CreatePurge
 	now := service.coordinator.now().UTC()
 	var view PurgePlanView
 	err := service.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		impact, err := service.lockPurgeImpactTx(ctx, tx, request.RepositoryID, request.Items, now, "")
+		if err := lockRetentionRepositoryTx(ctx, tx, request.RepositoryID); err != nil {
+			return err
+		}
+		impact, err := service.lockPurgeImpactTx(ctx, tx, request.RepositoryID, request.Items, now, "", purgeExactRevisions)
 		if err != nil {
 			return err
 		}
@@ -707,6 +715,9 @@ func (service *PurgeService) Execute(ctx context.Context, request ExecutePurgeRe
 	now := service.coordinator.now().UTC()
 	result := PurgeExecuteResult{PlanID: request.PlanID}
 	err := service.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockRetentionRepositoryTx(ctx, tx, request.RepositoryID); err != nil {
+			return err
+		}
 		var plan model.BackupAssetPurgePlan
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&plan, "id = ?", request.PlanID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -733,7 +744,7 @@ func (service *PurgeService) Execute(ctx context.Context, request ExecutePurgeRe
 				CapabilityRevision: item.ExpectedCapabilityRevision,
 			})
 		}
-		impact, err := service.lockPurgeImpactTx(ctx, tx, plan.RepositoryID, inputs, now, plan.ID)
+		impact, err := service.lockPurgeImpactTx(ctx, tx, plan.RepositoryID, inputs, now, plan.ID, purgeExactRevisions)
 		if err != nil {
 			return err
 		}
@@ -757,14 +768,14 @@ func (service *PurgeService) Execute(ctx context.Context, request ExecutePurgeRe
 			return fmt.Errorf("%w: explicit purge plan changed", backupasset.ErrConflict)
 		}
 		for _, item := range items {
-			attempt, claimErr := service.coordinator.ClaimTx(ctx, tx, ClaimRequest{
+			attempt, claimErr := service.coordinator.claimInRepositoryTx(ctx, tx, ClaimRequest{
 				RecoveryPointID: item.RecoveryPointID,
 				Operation:       backupasset.LifecycleExplicitPurge,
 				PurgePlan: &PurgePlanSnapshot{
 					PlanID: request.PlanID, Revision: request.ExpectedRevision, ActorID: request.Actor.UserID,
 					PointRevision: item.ExpectedPointRevision, CapabilityRevision: item.ExpectedCapabilityRevision,
 				},
-			})
+			}, request.RepositoryID)
 			if claimErr != nil {
 				return claimErr
 			}
@@ -816,11 +827,14 @@ func validatePurgePlanItems(repositoryID string, items []PurgePlanItemInput) err
 	return nil
 }
 
-func (service *PurgeService) lockPurgeItemsByIDsTx(
-	tx *gorm.DB,
-	repositoryID string,
-	pointIDs []string,
-) ([]PurgePlanItemInput, error) {
+type purgeRevisionMode uint8
+
+const (
+	purgeExactRevisions purgeRevisionMode = iota
+	purgeCurrentRevisions
+)
+
+func purgeItemsFromIDs(pointIDs []string) ([]PurgePlanItemInput, error) {
 	if len(pointIDs) < 1 || len(pointIDs) > maxPurgePlanItems {
 		return nil, fmt.Errorf("%w: invalid explicit purge plan", backupasset.ErrInvalidState)
 	}
@@ -831,19 +845,7 @@ func (service *PurgeService) lockPurgeItemsByIDsTx(
 			return nil, fmt.Errorf("%w: invalid explicit purge plan item", backupasset.ErrInvalidState)
 		}
 		seen[pointID] = true
-		var point model.RecoveryPoint
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", pointID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
-			}
-			return nil, fmt.Errorf("load explicit purge recovery point: %w", err)
-		}
-		if point.RepositoryID != repositoryID || !explicitPurgeEligible(point) {
-			return nil, fmt.Errorf("%w: recovery point is not explicit-purge eligible", backupasset.ErrConflict)
-		}
-		items = append(items, PurgePlanItemInput{
-			RecoveryPointID: point.ID, PointRevision: point.PointRevision, CapabilityRevision: point.CapabilityRevision,
-		})
+		items = append(items, PurgePlanItemInput{RecoveryPointID: pointID})
 	}
 	return items, nil
 }
@@ -855,6 +857,7 @@ func (service *PurgeService) lockPurgeImpactTx(
 	items []PurgePlanItemInput,
 	now time.Time,
 	excludePlanID string,
+	revisionMode purgeRevisionMode,
 ) (purgeImpactSnapshot, error) {
 	var repository model.BackupRepository
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", repositoryID).Error; err != nil {
@@ -868,20 +871,28 @@ func (service *PurgeService) lockPurgeImpactTx(
 	points := make([]model.RecoveryPoint, 0, len(items))
 	for _, item := range items {
 		var point model.RecoveryPoint
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", item.RecoveryPointID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return purgeImpactSnapshot{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ? AND repository_id = ?", item.RecoveryPointID, repositoryID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return purgeImpactSnapshot{}, fmt.Errorf("load explicit purge recovery point: %w", err)
 			}
-			return purgeImpactSnapshot{}, fmt.Errorf("load explicit purge recovery point: %w", err)
+			var existing model.RecoveryPoint
+			if err := tx.Select("id").First(&existing, "id = ?", item.RecoveryPointID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return purgeImpactSnapshot{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
+				}
+				return purgeImpactSnapshot{}, fmt.Errorf("load explicit purge recovery point: %w", err)
+			}
+			return purgeImpactSnapshot{}, fmt.Errorf("%w: recovery point is not explicit-purge eligible", backupasset.ErrConflict)
 		}
-		if point.RepositoryID != repositoryID || point.PointRevision != item.PointRevision ||
-			point.CapabilityRevision != item.CapabilityRevision || !explicitPurgeEligible(point) {
+		if !explicitPurgeEligible(point) || (revisionMode != purgeCurrentRevisions &&
+			(item.PointRevision < 1 || item.CapabilityRevision < 1 || point.PointRevision != item.PointRevision ||
+				point.CapabilityRevision != item.CapabilityRevision)) {
 			return purgeImpactSnapshot{}, fmt.Errorf("%w: recovery point is not explicit-purge eligible", backupasset.ErrConflict)
 		}
 		pointIDs = append(pointIDs, point.ID)
 		points = append(points, point)
 		views = append(views, PurgePlanItemView{
-			RecoveryPointID: point.ID, PointRevision: item.PointRevision, CapabilityRevision: item.CapabilityRevision,
+			RecoveryPointID: point.ID, PointRevision: point.PointRevision, CapabilityRevision: point.CapabilityRevision,
 		})
 	}
 	counts, err := countLifecycleImpact(ctx, tx, pointIDs, now)

@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
@@ -863,6 +865,78 @@ func TestFeatureTransitionCompensationFenceClosesFeatureLive(t *testing.T) {
 	}
 }
 
+func TestRuntimeCompensationFenceClosesComposedCatalogAndPublication(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
+	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.BackupAssetInstallation{}, &model.BackupAssetInventoryRun{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	digest := strings.Repeat("a", 64)
+	if err := db.Create(&model.BackupAssetInstallation{
+		ID: "fence-install", Slot: 1, Class: string(ga.InstallationFresh), Readiness: string(ga.ReadinessReady),
+		InventoryDigest: digest, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetInventoryRun{
+		ID: "fence-run", Digest: digest, Status: ga.InventoryRunComplete, CountsJSON: "{}", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+	ctx := context.Background()
+	if err := runtime.admission.InitializeManaged(ctx); err != nil {
+		t.Fatalf("initialize admission: %v", err)
+	}
+	token, err := runtime.admission.Acquire(ctx, publication.OperationEvidenceBackup)
+	if err != nil {
+		t.Fatalf("acquire existing token: %v", err)
+	}
+	tokenClosed := false
+	defer func() {
+		if !tokenClosed {
+			if err := token.Close(); err != nil {
+				t.Errorf("clean up existing token: %v", err)
+			}
+		}
+	}()
+	pointID := strings.Repeat("f", 32)
+	scope := catalog.AuthorizationScope{Role: "admin", UserID: 1}
+	catalogService := runtime.CatalogService()
+	if _, err := catalogService.GetRecoveryPoint(ctx, pointID, scope); !errors.Is(err, backupasset.ErrNotFound) {
+		t.Fatalf("live Catalog query error=%v, want not found", err)
+	}
+	primaryErr := errors.New("primary failure")
+	compensationErr := errors.New("compensation failure")
+	joined := runtime.joinFeatureTransitionFailure(primaryErr, compensationErr)
+	if !errors.Is(joined, primaryErr) || !errors.Is(joined, compensationErr) || !errors.Is(joined, ErrFeatureTransitionCompensation) {
+		t.Fatalf("joined failure=%v", joined)
+	}
+	if _, err := catalogService.GetRecoveryPoint(ctx, pointID, scope); err != catalog.ErrFeatureDisabled {
+		t.Fatalf("fenced Catalog query error=%v, want feature disabled", err)
+	}
+	if _, err := runtime.admission.Acquire(ctx, publication.OperationEvidenceBackup); !errors.Is(err, ErrAdmissionStopped) {
+		t.Fatalf("fenced admission error=%v, want admission stopped", err)
+	}
+	if err := token.Close(); err != nil {
+		t.Fatalf("release existing token: %v", err)
+	}
+	tokenClosed = true
+}
+
 func TestFeatureTransitionCompensationFenceRejectsFurtherMutation(t *testing.T) {
 	events := []string{}
 	runtime := &Runtime{
@@ -1469,5 +1543,62 @@ func TestNonGlobalEnabledSettingCompensationFailureMarksContentAndSearchNotReady
 	}
 	if !strings.Contains(strings.Join(events, ","), "content-ready-false") {
 		t.Fatalf("events=%v did not record content-ready-false on non-global-enabled compensation failure", events)
+	}
+}
+
+func TestBackupAssetSettingsUncertainCommitFencesRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current map[string]string
+		overlay map[string]string
+	}{
+		{
+			name:    "global enable",
+			current: runtimeFoundationSettings(false),
+			overlay: map[string]string{"backup_assets.enabled": "true"},
+		},
+		{
+			name:    "non-global setting",
+			current: runtimeFoundationSettings(true),
+			overlay: map[string]string{"backup_assets.export.worker_concurrency": "3"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			effective := make(map[string]string, len(tc.current))
+			for key, value := range tc.current {
+				effective[key] = value
+			}
+			for key, value := range tc.overlay {
+				effective[key] = value
+			}
+			events := []string{}
+			contentReady := &atomic.Bool{}
+			contentReady.Store(true)
+			searchReady := &atomic.Bool{}
+			searchReady.Store(true)
+			runtime := &Runtime{
+				contentManager: &runtimeContentManagerFake{events: &events},
+				transitioner:   &runtimeFeatureTransitionerFake{events: &events, enabled: tc.current["backup_assets.enabled"] == "true"},
+				exportManager:  &featureTransitionEnableFailExportProbe{},
+				enablement:     readyGAEnablement(),
+				contentReady:   contentReady,
+				searchReady:    searchReady,
+			}
+			persistCalled := false
+			err := runtime.TransitionBackupAssetSettingsContextWithRestore(
+				context.Background(), tc.current, tc.overlay, effective, backupasset.ExportConfig{},
+				func(context.Context) error {
+					persistCalled = true
+					return settings.ErrSettingOverrideCommitUncertain
+				},
+				func(context.Context) error { return nil },
+			)
+			if !persistCalled || !errors.Is(err, settings.ErrSettingOverrideCommitUncertain) || !errors.Is(err, ErrFeatureTransitionCompensation) {
+				t.Fatalf("uncertain commit persistCalled=%t err=%v, want uncertain commit and compensation failure", persistCalled, err)
+			}
+			if contentReady.Load() || searchReady.Load() || !runtime.featureTransitionFenced.Load() {
+				t.Fatalf("uncertain commit left contentReady=%t searchReady=%t fenced=%t, want false/false/true", contentReady.Load(), searchReady.Load(), runtime.featureTransitionFenced.Load())
+			}
+		})
 	}
 }

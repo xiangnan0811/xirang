@@ -20,6 +20,8 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset/content"
+	"xirang/backend/internal/config"
+	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -1306,17 +1308,149 @@ func TestNodeDoctorRouteRBAC(t *testing.T) {
 	}
 }
 
+func TestNodeInitialFilesRouteAuthenticationAndOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen on loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get database connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.AuditLog{}, &model.TokenRevocation{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_INITIAL_FILES_JWT_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
+	tokens := make(map[string]string)
+	users := make(map[string]model.User)
+	for _, actor := range []struct{ name, role string }{
+		{name: "viewer", role: "viewer"},
+		{name: "non_owner", role: "operator"},
+		{name: "owner", role: "operator"},
+	} {
+		user := model.User{Username: "initial-files-" + actor.name, PasswordHash: "FAKE_HASH_FOR_TEST_ONLY", Role: actor.role, TokenVersion: 1}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("create %s: %v", actor.name, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("generate token for %s: %v", actor.name, err)
+		}
+		tokens[actor.name] = token
+		users[actor.name] = user
+	}
+	address := listener.Addr().(*net.TCPAddr)
+	node := model.Node{
+		Name: "initial-files-route", Host: address.IP.String(), Port: address.Port,
+		Username: "test", AuthType: "password", Password: "FAKE_SSH_PASSWORD_FOR_TEST_ONLY",
+		BasePath: "/srv/backups", BackupDir: "initial-files-route",
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: users["owner"].ID}).Error; err != nil {
+		t.Fatalf("create ownership: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	path := fmt.Sprintf("/api/v1/nodes/%d/files?initial=1", node.ID)
+	request := func(token string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	for _, tc := range []struct {
+		name       string
+		token      string
+		wantStatus int
+	}{
+		{name: "unauthenticated", wantStatus: http.StatusUnauthorized},
+		{name: "viewer", token: tokens["viewer"], wantStatus: http.StatusForbidden},
+		{name: "non_owning_operator", token: tokens["non_owner"], wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := request(tc.token)
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.wantStatus, response.Body.String())
+			}
+			var envelope struct {
+				Code    int             `json:"code"`
+				Message string          `json:"message"`
+				Data    json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || envelope.Code != tc.wantStatus || envelope.Message == "" || string(envelope.Data) != "null" {
+				t.Fatalf("invalid denial envelope: body=%s err=%v", response.Body.String(), err)
+			}
+			if err := listener.SetDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				t.Fatalf("set listener deadline: %v", err)
+			}
+			conn, err := listener.Accept()
+			if err == nil {
+				_ = conn.Close()
+				t.Fatal("denied request connected to SSH transport")
+			}
+			if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+				t.Fatalf("check for denied SSH connection: %v", err)
+			}
+		})
+	}
+
+	if err := listener.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set listener deadline: %v", err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+		accepted <- err
+	}()
+	response := request(tokens["owner"])
+	if err := <-accepted; err != nil {
+		t.Fatalf("owning operator did not reach SSH transport: %v", err)
+	}
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("owning operator status=%d want=%d body=%s", response.Code, http.StatusBadGateway, response.Body.String())
+	}
+}
+
 func TestNodeTrustHostKeyRouteRequiresAdmin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", filepath.Join(t.TempDir(), "known_hosts"))
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := database.Open(config.Config{DBType: "sqlite", SQLitePath: filepath.Join(t.TempDir(), "node-trust.sqlite")})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Alert{}, &model.AuditLog{}, &model.CredentialAuditEvent{}, &model.TokenRevocation{}); err != nil {
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+	if err := database.RunMigrations(db, "sqlite"); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 

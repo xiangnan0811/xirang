@@ -486,6 +486,62 @@ func TestWithSQLiteBusyRetryTxDiscardsConnectionWhenRestoreFails(t *testing.T) {
 	}
 }
 
+func TestWithSQLiteBusyRetryTxOutcomeSeparatesCommitAndRestoreFailure(t *testing.T) {
+	db, primary, state := newSQLiteBusyRetryInstrumentedDB(t)
+	if err := db.Exec("CREATE TABLE outcome_test (value INTEGER)").Error; err != nil {
+		t.Fatal(err)
+	}
+	state.failRestore.Store(true)
+	calls := 0
+	outcome := dbtx.WithSQLiteBusyRetryTxOutcome(context.Background(), db, func(tx *gorm.DB) error {
+		calls++
+		return tx.Exec("INSERT INTO outcome_test (value) VALUES (7)").Error
+	})
+	if outcome.TransactionErr != nil || !outcome.BodyCompleted || outcome.CommitNotApplied || !errors.Is(outcome.CleanupErr, errSQLiteBusyRetryRestore) {
+		t.Fatalf("unexpected transaction outcome: %+v", outcome)
+	}
+	if calls != 1 || state.closes.Load() != 1 {
+		t.Fatalf("body calls=%d, closed connections=%d; want 1 each", calls, state.closes.Load())
+	}
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM outcome_test WHERE value = 7").Scan(&count).Error; err != nil || count != 1 {
+		t.Fatalf("committed row count=%d, error=%v", count, err)
+	}
+	assertSQLiteBusyRetryConnectionReleased(t, primary)
+}
+
+func TestWithSQLiteBusyRetryTxOutcomeDoesNotReplayBusyCommit(t *testing.T) {
+	db, primary, state := newSQLiteBusyRetryInstrumentedDB(t)
+	state.failCommitBusy.Store(true)
+	calls := 0
+	outcome := dbtx.WithSQLiteBusyRetryTxOutcome(context.Background(), db, func(*gorm.DB) error {
+		calls++
+		return nil
+	})
+	if !outcome.BodyCompleted || !outcome.CommitNotApplied || !errors.Is(outcome.TransactionErr, sqlite3.ErrBusy) {
+		t.Fatalf("unexpected transaction outcome: %+v", outcome)
+	}
+	if calls != 1 || state.closes.Load() != 1 {
+		t.Fatalf("body calls=%d, closed connections=%d; want 1 each", calls, state.closes.Load())
+	}
+	assertSQLiteBusyRetryConnectionReleased(t, primary)
+}
+
+func TestWithSQLiteBusyRetryTxOutcomeDiscardsAfterCommitCancellation(t *testing.T) {
+	db, primary, state := newSQLiteBusyRetryInstrumentedDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state.cancelAfterCommit = cancel
+	outcome := dbtx.WithSQLiteBusyRetryTxOutcome(ctx, db, func(*gorm.DB) error { return nil })
+	if outcome.TransactionErr != nil || !outcome.BodyCompleted || !errors.Is(outcome.CleanupErr, context.Canceled) {
+		t.Fatalf("unexpected transaction outcome: %+v", outcome)
+	}
+	if state.closes.Load() != 1 || state.busyTimeoutStatements.Load() != 2 {
+		t.Fatalf("closed connections=%d, timeout statements=%d; want 1 and 2", state.closes.Load(), state.busyTimeoutStatements.Load())
+	}
+	assertSQLiteBusyRetryConnectionReleased(t, primary)
+}
+
 func TestWithSQLiteBusyRetryTxRestoresTimeoutAfterAppliedZeroMutationError(t *testing.T) {
 	db, primary, state := newSQLiteBusyRetryInstrumentedDB(t)
 	state.failZeroAfterApply.Store(true)
@@ -629,6 +685,8 @@ type sqliteBusyRetryDriverState struct {
 	busyTimeoutSetToZero  atomic.Bool
 	failZeroAfterApply    atomic.Bool
 	failRestore           atomic.Bool
+	failCommitBusy        atomic.Bool
+	cancelAfterCommit     context.CancelFunc
 }
 
 type sqliteBusyRetryTestDriver struct{}
@@ -658,7 +716,28 @@ func (conn *sqliteBusyRetryTestConn) Close() error {
 }
 
 func (conn *sqliteBusyRetryTestConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	return conn.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	tx, err := conn.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &sqliteBusyRetryTestTx{Tx: tx, state: conn.state}, nil
+}
+
+type sqliteBusyRetryTestTx struct {
+	driver.Tx
+	state *sqliteBusyRetryDriverState
+}
+
+func (tx *sqliteBusyRetryTestTx) Commit() error {
+	if tx.state != nil && tx.state.failCommitBusy.Load() {
+		_ = tx.Rollback()
+		return sqlite3.ErrBusy
+	}
+	err := tx.Tx.Commit()
+	if err == nil && tx.state != nil && tx.state.cancelAfterCommit != nil {
+		tx.state.cancelAfterCommit()
+	}
+	return err
 }
 
 func (conn *sqliteBusyRetryTestConn) ExecContext(
